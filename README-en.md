@@ -2,9 +2,8 @@
 
 [English](README-en.md) · [简体中文](README.md)
 
-[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/deepseekv41flash/dsh-chatbot-tools)
-[![npm](https://img.shields.io/npm/v/dsh-chatbot-tools.svg)](https://www.npmjs.com/package/dsh-chatbot-tools)
-[![license](https://img.shields.io/npm/l/dsh-chatbot-tools.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/dsh-chatbot-tools)](https://www.npmjs.com/package/dsh-chatbot-tools)
+[![license](https://img.shields.io/npm/l/dsh-chatbot-tools)](./LICENSE)
 
 > Brings the **DeepSeek Chatbot** capabilities that DSH lacks into
 > [DeepSeek Harness](https://github.com/deepseek-ai): content safety (with guards for three

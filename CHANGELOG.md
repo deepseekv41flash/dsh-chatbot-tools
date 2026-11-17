@@ -3,6 +3,16 @@
 本文件记录本插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.2] - 2026-11-18
+
+### 修复
+
+- 去掉 listed 徽章（等 dsh-plugin.org 收录后由作者自行补上）。
+- 徽章改用无 `.svg` 后缀的等价 URL。原因：shields.io 按 URL 缓存徽章 **4 小时**
+  （`cache-control: max-age=14400`），而首次抓取时 `latest` 还指向 npm staged-publish 的
+  占位版本 `0.0.0-stage`（该版本没有 `license` 字段），于是 README 上一直显示
+  `license: missing` / `npm: v0.0.0-stage`。换 URL 即换缓存键，立即恢复正常。
+
 ## [0.2.1] - 2026-11-18
 
 纯文档补丁，让 npm 页面与仓库保持一致。

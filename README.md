@@ -2,9 +2,8 @@
 
 [English](README-en.md) · [简体中文](README.md)
 
-[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/deepseekv41flash/dsh-chatbot-tools)
-[![npm](https://img.shields.io/npm/v/dsh-chatbot-tools.svg)](https://www.npmjs.com/package/dsh-chatbot-tools)
-[![license](https://img.shields.io/npm/l/dsh-chatbot-tools.svg)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/dsh-chatbot-tools)](https://www.npmjs.com/package/dsh-chatbot-tools)
+[![license](https://img.shields.io/npm/l/dsh-chatbot-tools)](./LICENSE)
 
 > 补齐 **DeepSeek Chatbot（官方 chat-demo + build_a_chatbot 套件）有、DSH 缺**的能力：
 > 内容安全（含 3 条服务端互斥约束的守卫）、联网/图片搜索、OCR、TTS、ASR、文档上传。

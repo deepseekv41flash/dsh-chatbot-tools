@@ -1,6 +1,6 @@
 {
   "name": "dsh-chatbot-tools",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "把 DeepSeek Chatbot 的能力带进 DeepSeek Harness：内容安全、联网/图片搜索、OCR、TTS、ASR、文档上传",
   "type": "module",
   "main": "./lib/index.js",
