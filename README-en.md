@@ -190,7 +190,12 @@ See `docs/verification-2026-11-17.md`. Summary:
   server's vague error through to the model.
 - ✅ Uninstall: tools vanish immediately, registry cleared, junction removed (verification doc §7)
 - ✅ Shows up on the Plugins page after bundle install (`installed:true`)
-- ✅ Unit tests: `npm test` → 29 + 18 + 31 checks green
+- ✅ Unit tests: `npm test` → 29 + 18 + 31 + 11 checks green
+- ✅ The refusal middleware is now a pure, testable generator (`refusalGuardStream`);
+  **the interception branch is driven deterministically by 11 cases** (passthrough when off,
+  output-side refusal, input-side block, blocked images, rate-limit/network errors must not be
+  mistaken for a refusal, fallback chunk structure). Mutation-tested: deleting the matcher or the
+  passthrough branch makes the suite FAIL.
 - ✅ Files API upload failures are classified from the **error text**, not just the status code
   (file-count limit / storage quota / unsupported / image too large / password-protected /
   unparsable); the patterns come from the official demo client's `src/services/api/errors.ts`
@@ -198,11 +203,11 @@ See `docs/verification-2026-11-17.md`. Summary:
   input-side `400 Content Exists Risk` (including the blocked-image explanation). Four negative
   cases guard against false positives (`max_tokens`, network error, an invalid `safety_check`
   field, and rate limiting must all read as *not* a refusal).
-- ⚠️ **A real refusal could not be triggered**: five categories (phishing, violent threat, document
-  forgery, hate speech, plus a no-`safety_check` control) all returned 200 + `end_turn` +
-  `safety_tokens: 0`. So the interception branch is unit-tested only; the pass-through branch is
-  verified end-to-end (with the toggle on, every turn goes through this middleware and streams
-  normally). Evidence: `docs/verification-2026-11-17.md` §22.
+- ⚠️ **A real refusal still could not be triggered**: five categories (phishing, violent threat,
+  document forgery, hate speech, plus a no-`safety_check` control) all returned 200 + `end_turn` +
+  `safety_tokens: 0`. So the interception branch has **no live evidence from a real refusal**
+  (the branch behaviour itself is covered by the deterministic tests above).
+  Evidence: `docs/verification-2026-11-17.md` §22 and §24.
 
 ## Server-side constraints (none of them documented)
 

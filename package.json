@@ -1,6 +1,6 @@
 {
   "name": "dsh-chatbot-tools",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "把 DeepSeek Chatbot 的能力带进 DeepSeek Harness：内容安全、联网/图片搜索、OCR、TTS、ASR、文档上传",
   "type": "module",
   "main": "./lib/index.js",
@@ -67,7 +67,7 @@
   },
   "scripts": {
     "build": "bash scripts/build.sh",
-    "test": "node test/safety-guard.test.mjs && node test/speakable.test.mjs && node test/files.test.mjs",
+    "test": "node test/safety-guard.test.mjs && node test/speakable.test.mjs && node test/files.test.mjs && node test/refusal-stream.test.mjs",
     "typecheck": "node --check lib/index.js"
   }
 }
