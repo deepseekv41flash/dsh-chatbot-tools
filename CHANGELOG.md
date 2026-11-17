@@ -3,6 +3,16 @@
 本文件记录本插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.1] - 2026-11-18
+
+纯文档补丁，让 npm 页面与仓库保持一致。
+
+### 变更
+
+- README 顶部对齐本账号其他插件格式：语言切换行 + listed / npm / license 三枚徽章 + 引用块摘要。
+- 英文版拆到独立的 `README-en.md`（原先内联在 `README.md` 底部），两份互加语言切换链接。
+- `package.json` 的 `files` 增加 `README-en.md`。
+
 ## [0.2.0] - 2026-11-18
 
 首个公开发布版本。

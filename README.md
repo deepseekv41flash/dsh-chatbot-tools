@@ -1,12 +1,13 @@
 # dsh-chatbot-tools
 
-[![npm version](https://img.shields.io/npm/v/dsh-chatbot-tools.svg)](https://www.npmjs.com/package/dsh-chatbot-tools)
-[![license](https://img.shields.io/npm/l/dsh-chatbot-tools.svg)](LICENSE)
-[![node](https://img.shields.io/node/v/dsh-chatbot-tools.svg)](package.json)
+[English](README-en.md) · [简体中文](README.md)
 
-补齐 **DeepSeek Chatbot（官方 chat-demo + build_a_chatbot 套件）有、DSH 缺**的能力。
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/deepseekv41flash/dsh-chatbot-tools)
+[![npm](https://img.shields.io/npm/v/dsh-chatbot-tools.svg)](https://www.npmjs.com/package/dsh-chatbot-tools)
+[![license](https://img.shields.io/npm/l/dsh-chatbot-tools.svg)](./LICENSE)
 
-中文 | [English](#english)
+> 补齐 **DeepSeek Chatbot（官方 chat-demo + build_a_chatbot 套件）有、DSH 缺**的能力：
+> 内容安全（含 3 条服务端互斥约束的守卫）、联网/图片搜索、OCR、TTS、ASR、文档上传。
 
 | 能力 | Chatbot | DSH 原生 | 本插件 |
 |---|---|---|---|
@@ -197,54 +198,3 @@ dsh plugin --profile desktop add link:C:/Users/Admin/dsh-chatbot-tools
 
 MIT © 2026 deepseekv41flash
 
----
-
-## English
-
-A [DeepSeek Harness](https://github.com/deepseek-ai) plugin that brings **DeepSeek Chatbot**
-capabilities missing from DSH.
-
-| Capability | Provided as |
-|---|---|
-| Content safety (`safety_check`) | Request-level injection, **3 exclusive-constraint guards**, configurable in Settings |
-| Web search with structured sources | `chatbot_search` (site, publish date, authority) |
-| Image search | `chatbot_image_search` |
-| Document OCR | `chatbot_ocr` (per-page text) |
-| Document upload (Files API) | `chatbot_upload_document` → `file_id` |
-| Speech-to-text | `chatbot_asr` + official voice-input UI |
-| Text-to-speech | `chatbot_tts` + per-message 🔊 button |
-| Refusal surfacing | `llm/stream` middleware |
-
-### Not covered (by design)
-
-- **Read URL** — DSH already ships `web_fetch`.
-- **Deep search** (search → open_page → find_in_page) — Chatbot-app-level orchestration; DSH's search + thinking mode is close enough.
-- **User metadata tagging** — app-level feature that would fight DSH's own system context / agent presets.
-- **Protocol-level citations / source cards** — deliberately skipped: rendering server `citations_delta` blocks needs a custom LLM adapter, not worth it. Structured sources are returned instead.
-- **Session titles** — DSH has native title generation.
-- **Referencing an uploaded `file_id` inside a conversation** — upload works; the reference path is not yet verified end-to-end.
-
-### Install
-
-```bash
-dsh plugin --profile <profile> add dsh-chatbot-tools
-```
-
-TTS/ASR require a platform API key. Credential order: settings `apiKey` → `DEEPSEEK_API_KEY`
-env var → DSH credential service → DeepSeek account login.
-
-### The three server-side constraints
-
-Injecting `safety_check` makes the server enforce exclusivity over the **whole request**.
-Each violation is a hard 400 that **cannot be recovered by retrying**, because the offending
-history is already persisted. Every constraint is guarded here:
-
-1. No `defer_loading: true` tool declarations may be present → `defer-loading-guard`
-2. No non-thinking mode (`thinking: disabled`, incl. title-generation requests) → `thinking-off`
-3. `tool_result` blocks must be text-only → `non-text-tool-result`
-
-Guard order: `mode-off` → `purpose-skip` → `thinking-off` → `non-text-tool-result` → `defer-loading-guard` → `observe` → `enforce`.
-
-### License
-
-MIT © 2026 deepseekv41flash
