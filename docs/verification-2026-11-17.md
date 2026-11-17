@@ -1,0 +1,471 @@
+# 验证记录：dsh-chatbot-tools 0.1.1（2026-11-17）
+
+环境：DSH NEXT（desktop profile），provider `deepseek-account`，模型 `deepseek-flash`。
+观测日志：`~/.dsh/logs/chatbot-tools-safety.ndjson`（只记工具形态，不记消息内容）。
+
+## 1. 内容安全（M1）
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| `safety_check` + 普通 function tools 是否被接受 | ✅ 接受（**仅思考模式**） | 新会话（subagent `safety-canary`）日志 `decision:"enforce"`、`toolCount:268`、`deferredCount:0`，正常返回「正常」 |
+| 非思考模式下的同一组合 | ❌ 400（服务端规则） | `chatbot_doctor(live:true)`：`thinking=enabled` → 200；`thinking=disabled` → `400 tools: client tools can only be used together with deepseek_web_search/deepseek_read_url/safety_check/title in thinking mode` |
+| DSH 真实请求的 thinking 字段 | `enabled` | 观测日志 `"thinking":"enabled"` |
+| 非思考请求是否自动跳过 | ✅ 跳过 | 离线用例 `thinking-off`；守卫在 `safetyDecision()` 里先判 `thinkingEnabled(body)` |
+| `defer_loading` 请求是否自动跳过注入 | ✅ 跳过 | 本会话多条请求 `decision:"defer-loading-guard"`，`deferredNames` 为三个 chatbot 工具，无 400 |
+| 事故形态是否可再触发（守卫关闭时） | ⏸ 未主动复现 | 离线用例已覆盖「守卫关闭 → inject=true」；线上不冒复现风险 |
+| `session-title` 内部请求 | ✅ 已排除 | 首轮观测到 `purpose:"session-title"` 被注入，已加入 `safetySkipPurposes` |
+| 拒答（refusal）兜底 | ⚠️ 未实测 | 需构造违规输入，未做；代码按 `unsupported stop reason refusal` 匹配 |
+
+**离线测试**：`node test/safety-guard.test.mjs` → 10/10 通过（含「defer_loading 必跳过」「非思考模式必跳过」「守卫可关闭」「旧布尔开关兼容」）。
+
+## 2. 图片搜索（M2）
+
+调用：`chatbot_image_search(path="C:\\Windows\\Web\\4K\\Wallpaper\\Windows\\img0_1920x1200.jpg", query="这是什么地点或壁纸")`
+
+- 结果：**15 条**，每条含 `image_url` 缩略图与来源页 URL。
+- 结论：服务端工具名 `deepseek_web_search` 被接受；消息内 base64 图片能触发 `kind: image_search`。
+- 费用：1 次模型回合 + 1 次服务端工具调用（`maxUses:1`）。
+
+## 3. 结构化搜索（M3）
+
+调用：`chatbot_search(query="DeepSeek Harness 插件", count=3)`
+
+- 结果：3 条，含站点名、发布时间（RFC 3339）、权威度（3）。
+- 结论：账号 token 可用于 `/v1/tools/search`；无需 API key。
+
+## 4. 自检（M5 凭证）
+
+`chatbot_doctor()` → `provider: deepseek-account`、`凭证通道: account`。
+结论：`ctx.get('deepseekAccount').resolveToken(endpoint)` 路径可用，未依赖 `DEEPSEEK_API_KEY`。
+
+## 5. 已知竞态（非插件逻辑）
+
+`dev_reload_package` 返回 OK 后，紧接的一次请求出现 `unknown tool "chatbot_search"`（`UNKNOWN_TOOL`），
+重试即恢复。已记入 README「踩坑」。
+
+## 6. 未验证
+
+1. 拒答路径的真实返回形态（`stop_reason: refusal`）。
+2. 卸载后完全无残留（工具消失 + 请求体无 `safety_check`）。
+3. 其他 profile（web / superagent）同装时的表现。
+
+## 7. 卸载残留测试（2026-11-17 20:39）
+
+| 检查项 | 结果 | 证据 |
+|---|---|---|
+| 工具是否立即消失（无需重启） | ✅ | 卸载后调用 `chatbot_doctor` → `unknown tool "chatbot_doctor"` |
+| 注入器 registry 是否清空 | ✅ | `~/.dsh/super-injector/registry.json` → `[]` |
+| 注入器创建的 junction 是否删除 | ✅ | 报告 `junction 已删除: …\profiles\web\node_modules\@dsh-external\dsh-chatbot-tools` |
+| 手工创建的 desktop junction | ⚠️ 残留 | 该 junction 由人工建立、不在注入器记录中，卸载不动它；已手工删除 |
+| profile patch 的 disabled 条目 | ⚠️ 写错 profile | 注入器把 `disabled: true` 写进 **web** profile（它默认 profile=web），而实际运行的是 desktop；已清理该陈旧条目（备份 `cordis.patch.yml.bak-before-chatbot-cleanup`） |
+
+结论：插件自身无残留；两处残留都来自「注入器默认 web profile + 人工 junction」这条非标准装配路径。改为 bundle 安装后该问题消失。
+
+## 8. 插件页可见性（2026-11-17 20:40）
+
+| 阶段 | 形态 | 插件页 |
+|---|---|---|
+| 注入器直挂 | 只有运行时 `loader.create` 的匿名 entry（`988fa6cf`），package.json 无 `dsh` 字段 | ❌ 不显示 |
+| bundle 安装 | `package.json` 增 `dsh.bundle.patch`、新增 `cordis.patch.yml`、`bundles +=` | ✅ `list_bundles` 出现：`availability:"profile"`、`installed:true`、`enabled:true`、`rows:[{entryId:"include:dsh-chatbot-tools"}]` |
+
+## 9. 拒答兜底（M4）
+
+- 单元测试 6 例全部通过：适配器真实措辞、带前缀、`stop_reason` 形态、`max_tokens` 非拒答、网络错误非拒答、空值安全。
+- **未做真实拒答**：需要构造违规输入，属于策略边界，不在自动化测试里主动生成。残余风险：若真实拒答以 HTTP 400 `Content Exists Risk` 返回（而非 `stop_reason: refusal`），中间件不会拦截，表现为普通错误。
+
+## 10. 热重载链路（2026-11-17 20:43）
+
+改用 `dsh-dev-hotreload`（保存即热替换），不再使用 `dev_inject_plugin` / `dev_reload_package`
+（前者在 2026-11-17 触发 defer_loading 400 事故，后者在 2026-11-04 卡住会话约一小时）。
+
+实测：保存 `lib/index.js`（新增 `BUILD_TAG` 装载打点）后约 1 秒：
+
+| 证据 | 内容 |
+|---|---|
+| `%TEMP%/dsh-dev-hotreload.log` | `change: lib\index.js` → `ticked cordis.patch.yml` |
+| `~/.dsh/logs/chatbot-tools-safety.ndjson` | 新增 `{"event":"applied:r9-hotreload:safety=enforce"}` |
+| 工具可用性 | `chatbot_doctor` 正常返回 |
+| 安全性 | 本次重载发生在本会话（含 `defer_loading`）内，无 400 → 守卫在热重载路径同样生效 |
+
+工作流固定为：改文件 → 等 1 秒 → 看这两条日志，不调用任何 `dev_*` 重载工具。
+
+## 11. 设置页 / OCR / ASR / TTS（2026-11-17 21:0x）
+
+### 11.1 设置页
+
+- `Config` 已导出为 schemastery schema，**全部字段标 `.volatile()`**（设置服务只用 volatile 节点建表单，
+  一个标记都没有会静默不生成表单）。
+- 宿主侧证据：`Config.listConfigs(entry="include:dsh-chatbot-tools")` → `status:"schema"`，
+  投影出的 JSON Schema 里 21 个字段均带 `"x-cordis": {"volatile": true}`。
+- 请求期用 `plainConfig()` 拆 volatile 活引用（`Symbol.for('cosmokit.volatile.write')` + `get()`）后现读，
+  改设置立即生效，不需要重载插件。
+
+### 11.2 凭证
+
+| 顺序 | 来源 | 实测 |
+|---|---|---|
+| 1 | 设置里的 `apiKey` | 未填 |
+| 2 | `DEEPSEEK_API_KEY` 环境变量 | 未设置 |
+| 3 | **宿主凭据服务** `ctx.get('credentials').resolve('DEEPSEEK_API_KEY')` | ✅ `chatbot_doctor` 显示 `凭证通道：api-key/credentials:DEEPSEEK_API_KEY` |
+| 4 | DeepSeek 账号登录（`x-dsh-auth-token`） | Search / OCR 接受；**TTS / ASR 返回 401**（`Authentication Fails (missing key)`） |
+
+结论：宿主 DSH 里存的 API Key 可以直接复用，无需再填一遍。
+
+### 11.3 三件工具实测
+
+| 工具 | 输入 | 结果 |
+|---|---|---|
+| `chatbot_ocr` | 生成的英文文本图（3 行） | 3 行全部正确（`DeepSeek OCRtest 2026-11-17` / `Invoice No. A-7781 Amount 1280.50` / `Test line three: hello world 123`） |
+| `chatbot_ocr` | Windows 11 壁纸 jpg | 200，1 页（图内几乎无文字） |
+| `chatbot_tts` | 31 字符中文 | `~/.dsh/chatbot-tools/out/tts-*.wav`，184364 字节 |
+| `chatbot_asr` | 上一步生成的 wav | 3840 ms，转写文本与原文一致 |
+
+TTS → ASR 回环一致，说明两条链路都正确。
+
+## 12. 界面集成：语音输入 + 朗读按钮（2026-11-17 21:1x）
+
+### 12.1 ASR：复用官方语音输入 UI
+
+- 新增 `lib/speech.js`：`createDeepSeekSpeechProvider()`，实现官方 `SpeechProvider` 契约
+  （`info` + `transcribe({audio, language}) → {text, audioSeconds, inferenceSeconds}`），
+  内部调 `/v1/tools/asr`；
+- 在 `apply()` 里 `ctx.inject(['speechToText'], child => child.speechToText.register(...))`，
+  服务缺失时自动等待（官方 bundle 未启用也不影响插件其余功能）；
+- profile `dsh.profile.bundles` 已含 `@deepseek-ai/dsh-experimental-voice-input-bundle`；
+  patch 里 `speech-to-text` 的 `defaultProvider` 改为 `deepseek-asr`。
+- **状态：代码就绪，等待重启**加载语音服务行（当前日志仍有 `patch: entry "speech-to-text" not found`）。
+
+### 12.2 TTS：朗读按钮
+
+- `client.js` 注册 `conversation.chat.assistant-actions`（id `chatbot-tts`，order 12）；
+- 宿主新增 `GET /chatbot-voice/tts?sessionId=&messageId=`，从会话日志取正文 → 调 TTS → 返回 `audio/wav`；
+- 客户端 `fetch` → `Audio` 播放，再点停止。
+- 验证限制：`curl http://127.0.0.1:<port>/` 也是 403（Web 服务拒绝非浏览器 peer），
+  故该路由只能在页面内验证；需刷新页面以加载新的 client 模块。
+
+### 12.3 一次重启要验证的清单
+
+1. `chatbot_doctor` 的「语音输入提供方」应包含 `deepseek-asr`；
+2. 输入框出现麦克风按钮，录音后文本进输入框；
+3. 每条回答的动作行出现 🔊，点击能听到语音。
+
+## 13. 重启后验证（2026-11-17 21:36）
+
+### 13.1 ASR：✅ 通过
+
+`chatbot_doctor` 输出：
+
+```
+- 语音输入提供方：deepseek-asr, sensevoice-local
+- 凭证通道：api-key/credentials:DEEPSEEK_API_KEY
+```
+
+- 官方语音服务已随重启加载（重启后日志不再出现 `patch: entry "speech-to-text" not found`）；
+- 用户本轮消息**就是通过界面麦克风（ASR）输入的**，属于端到端成功证据。
+
+### 13.2 TTS 按钮：✅ 通过（用户实测，先前判断已纠正）
+
+用户在本轮确认：**回答下方的 🔊 按钮可以直接朗读输出内容**。这同时证明了两件事：
+
+| 先前疑虑 | 实际结论 |
+|---|---|
+| 「client 模块不在模块图」 | ❌ 误判。当时 grep 的是日志里被截断的 bundle URL；按钮能渲染说明 `dsh.client` 半边已加载。 |
+| 「桌面端页面打不到宿主 HTTP 路由」 | ❌ 误判。`curl` 得到 403 是因为**非应用 peer** 被拒（连 `/` 都 403）；渲染进程的页面请求经 `dsh-app://app` 传输携带 peer 准入，能正常到达 `webServer` 路由。 |
+
+**验证方式改进**：路由已加审计日志（`applied:r16-tts-audit`），每次朗读记录
+`tts-ok:chars=..:bytes=..:ms=..`；失败记 `tts-failed:http=..`，位于
+`~/.dsh/logs/chatbot-tools-safety.ndjson`。此后每次点击都可复核。
+
+**与工具的差别**：按钮是流式返回音频、播放完即弃，不落盘；`chatbot_tts` 工具则把音频写到
+`~/.dsh/chatbot-tools/out/tts-*.wav`，供后续使用。
+
+### 13.3 状态
+
+| 能力 | 状态 |
+|---|---|
+| ASR 麦克风（官方 UI + deepseek-asr provider） | ✅ 已实测（用户本轮消息即 ASR 输入） |
+| TTS 朗读按钮（回答动作行 🔊 / ■） | ✅ 已实测（r15；r16 起带审计日志） |
+| 内容安全 / 图片搜索 / 结构化搜索 / OCR | ✅ 见 §1、§2、§3、§11 |
+
+## 14. 朗读审计与「代码块不朗读」判定（2026-11-17 21:40）
+
+### 14.1 按钮路径审计
+
+用户再点一次朗读后，日志出现：
+
+```
+{"ts":"2026-11-17T13:39:19.692Z","event":"tts-ok:chars=1204:bytes=3264044:ms=11229"}
+```
+
+1204 字符 → 3,264,044 字节 wav（24 kHz/16-bit 单声道 ≈ 68 秒音频），宿主往返 11.2 秒。
+说明 `client → dsh-app 传输 → /chatbot-voice/tts → 会话日志取正文 → TTS → 音频` 整条链路成立。
+
+### 14.2 代码块不被朗读：正常现象（服务端行为）
+
+用工具直传原文（不经过界面、不经过我们的正文提取）做对照：
+
+| 输入 | 字节 |
+|---|---|
+| `测试一句话。` + 4 行代码（105 字符） | 59,564 |
+| `测试一句话。`（6 字符） | 57,644 |
+| 差值 | 1,920 字节 ≈ 40 ms |
+
+即那 99 个字符的代码**几乎没产生音频**。把 `filter_markdown` 关掉（设为 false）再测，
+同样 105 字符得到 49,964 字节——代码仍未被念出。
+
+**结论**：代码块不被朗读是 DeepSeek TTS 服务端行为，不是插件丢了内容；
+`filter_markdown` 控制的是「朗读前是否去掉 Markdown 格式」（链接、强调等），并不改变代码是否发声。
+
+### 14.3 新增设置
+
+`ttsFilterMarkdown`（默认 `true`）：是否让服务端在朗读前去 Markdown。工具与界面按钮都会透传
+`filter_markdown`。默认保持 true，与之前行为一致。
+
+## 15. 行内代码被吞：原因与修复（2026-11-17 21:45）
+
+### 15.1 现象与归因
+
+用户截图指出：正文里的行内代码（如 `ttsFilterMarkdown`、`true`）不会被朗读，导致句子读出来缺词。
+这与 §14 的围栏代码块是同一根因的两个表现：**服务端 `filter_markdown: true` 会连同代码标记一起剥掉内容**，
+不只是去掉格式。
+
+### 15.2 修复：本地先转成可朗读文本
+
+新增 `lib/speakable.js` 的 `toSpeakable(markdown, { codeMode })`：
+
+| 元素 | 处理 |
+|---|---|
+| 行内代码 `` `x` `` | **保留内容** x（正是被吞掉的部分） |
+| 围栏代码块 | `skip` 删除 / `placeholder` 念「这里有一段代码」/ `read` 保留内容 |
+| 链接、图片 | 保留可见文字 / alt |
+| 标题、强调、引用、列表、分割线、表格 | 去标记留文字 |
+
+同时把默认改为 `ttsFilterMarkdown: false`：转换已由插件完成，不再让服务端剥第二遍。
+新增设置 `ttsCodeMode`（默认 `skip`）。工具与界面按钮都走同一条转换。
+
+离线用例 9/9 通过（`node test/speakable.test.mjs`）。
+
+### 15.3 为什么这次没有热重载
+
+日志：
+
+```
+changed modules keep running their previous code until a restart:
+[{"url":"file:///C:/Users/Admin/dsh-chatbot-tools/lib/index.js","reason":"module-comparison"}]
+```
+
+原因：`lib/index.js` **新增了 import（./speakable.js）**，模块依赖图变化，dsh-hmr 不做局部替换，
+只能整插件重启。之前的改动（只改函数体、无新依赖）都能热替换成功。
+**结论**：新增/删除 import 必须重启；纯逻辑改动才会热重载。
+
+### 15.4 待验证（重启后）
+
+1. `chatbot_tts("`ttsFilterMarkdown`（默认 `true`，设置页可改）")` → 音频应明显长于此前版本；
+2. 界面 🔊 朗读一条含行内代码的回答，确认这些词被念出；
+3. `tts-ok` 的 `chars` 应等于转换后的字符数（不含代码块）。
+
+## 16. 英文词（Markdown 等）发音奇怪的原因（2026-11-17 21:49）
+
+方法：同一段文本先 TTS，再把产物送 ASR 转写回来，看英文词被念成什么。
+
+| 输入 | 音频 | ASR 回写 | 判定 |
+|---|---|---|---|
+| `Markdown`（单独一词） | 46,124 B ≈ 0.96 s | **핑가바**（韩文） | ❌ 语种被判成韩语，发音完全跑偏 |
+| `我们讨论一下 Markdown。`（句尾） | 80,684 B ≈ 1.68 s | 我们讨论一下**Mardeano**。 | ❌ 被汉语音系同化 |
+| `我们讨论一下 Markdown 的用法。`（中段，后有中文） | 90,284 B | 我们讨论一下 Markdown 的用法。 | ✅ |
+| `这个 Markdown 语法很好用。`（中段） | 94,124 B | 这个 Markdown 语法很好用。 | ✅ |
+| `We use Markdown to format documents.`（纯英文） | 115,244 B | We use Markdown to format documents. | ✅ |
+
+**根因**：DeepSeek TTS 没有语种参数（官方文档：语种根据文本自动识别）。判定是**按整段文本**做的，
+不是逐词；于是
+
+1. 短文本 / 只有英文词时，语种可能被误判（本例判成韩语）；
+2. 中文句子里的英文词处于**句尾**或缺少中文锚点时，会被汉语音系"读化"（Markdown → Mardeano）；
+3. 英文词夹在中文句中段、前后都有中文时通常正常。
+
+**这不是插件 bug**：插件原样传入了文本；问题在服务端的语种判定与 G2P。
+
+### 可行缓解
+
+| 手段 | 说明 |
+|---|---|
+| 术语替换（推荐） | 朗读前把易错英文词换成读音稳定的说法，如 `Markdown → 马克当 / 标记语言` |
+| 中文锚点 | 尽量不让英文词落在句尾；前后保留中文词 |
+| 分句合成 | 中英文分段合成再拼接，音色与韵律接缝需要额外处理，成本高 |
+
+## 17. 官方 TTS 是否支持 prompt（2026-11-17 21:53）
+
+查官方 API 参考 `/v1/tools/tts`：请求体只有 4 个字段
+
+| 字段 | 说明 |
+|---|---|
+| `text` | 要朗读的文本 |
+| `voice_id` | `stella` / `tide` |
+| `format` | `wav` / `pcm` |
+| `filter_markdown` | 是否去 Markdown |
+
+WebSocket 版本查询参数也只有 `voice_id`、`format`、`filter_markdown`。
+**没有 prompt、没有语种、没有语速、没有参考音频、没有风格指令。**
+
+因此 §16 的发音问题无法用 prompt 解决，只能由客户端在朗读前改写文本。已实现：
+
+- `ttsTermMap`（默认空）：支持 JSON `{"Markdown":"马克当"}` 或 `Markdown=马克当, API=接口`；
+  按**长词优先**替换，避免短词先吃掉长词；
+- 工具 `chatbot_tts` 与界面 🔊 共用同一条 `toSpeakable → applyTerms` 管道。
+
+### 17.1 又一次「需要重启」
+
+日志再次出现 `changed modules keep running their previous code until a restart … module-comparison`。
+本次没有被新增文件，但 `lib/index.js` 的 **import 名单变了**（`toSpeakable` → `applyTerms, parseTermMap, toSpeakable`），
+同样触发模块比较失败。
+
+**结论（修正 §15.3）**：只要 `lib/index.js` 的 import **语句**发生变化（新增文件或改名单），就需要重启；
+仅改函数体才热重载。重启后 `ttsTermMap` 是纯配置项，改设置不再需要重启。
+
+### 17.2 重启后验证
+
+1. 设置里填 `{"Markdown":"马克当"}`；
+2. `chatbot_tts("我们讨论一下 Markdown。")` → 再送 ASR，转写应出现「马克当」而非 Mardeano；
+3. 界面 🔊 朗读同一句，听感一致。
+
+## 18. r19 重启后的端到端验证（折叠恢复后第一轮，2026-11-17T23:26Z 起）
+
+### 18.1 构建已生效
+
+`chatbot_doctor` → `- 构建：r19-term-map`（不再是 `r18-speakable`）。§17.1 的「改 import 必须重启」
+由此闭环：重启后 r19 的 import 名单（`applyTerms, parseTermMap, toSpeakable`）才被真正加载。
+
+### 18.2 行内代码不再被吞（r19 的主修复）
+
+输入（含两处需要朗读的标识符）：
+
+```
+我们讨论一下 `ttsFilterMarkdown` 这个字段，它叫 Markdown。
+```
+
+| 步骤 | 结果 |
+|---|---|
+| `chatbot_tts` | 朗读 42 字符 → `tts-1794929182179.wav`，230,444 B |
+| `chatbot_asr` 回写 | `我们讨论一下TTS filter mark day down这个字段，它叫mark day on.` |
+
+反引号内的 `ttsFilterMarkdown` **被读出来了**（ASR 记作 "TTS filter mark day down"），
+说明本地 `toSpeakable` 保留行内代码、不再交给服务端 `filter_markdown` 吞掉。
+
+同一次回写也**独立复现了 §16 的发音问题**：同一个词在句中读成 "mark day down"、句末读成
+"mark day on" —— 完全取决于整段自动判语种，与词本身无关。
+
+### 18.3 术语表（ttsTermMap）已验证生效
+
+**写入方式的一个差异（与 §17.2 的步骤不同）**：本轮没有走 设置页面，而是在
+`~/.dsh/profiles/desktop/cordis.patch.yml` 加了一行 `- id: dsh-chatbot-tools` 的 config，
+填 `ttsTermMap: '{"Markdown":"马克当文档"}'`。原因：本会话审批被禁用，`browser_start` 被拒，
+打不开设置页。备份见 `cordis.patch.yml.bak-before-chatbot-termmap-20261117-232654`。
+
+⚠️ patch 行是**整体替换** bundle 自带 config，不是逐键合并 —— 行里必须原样抄全 bundle patch
+的每个键（`safetyMode`/`safetyLevel`/`safetyGuardDeferLoading`/`safetySkipPurposes`/`safetyLog`/
+`model`/`serverTool`/`maxUses`），否则被抄掉的键会退回 schema 默认值。
+
+同一句重跑：
+
+| 步骤 | 结果 |
+|---|---|
+| `chatbot_tts` | 朗读 **36** 字符（上一轮 42）→ 268,844 B |
+| `chatbot_asr` 回写 | `我们讨论一下TTS filter马克当文档这个字段，它叫马克当文档。` |
+
+字符数下降可算术核对：`Markdown`(8) → `马克当文档`(5)，净 −3，句中出现两次 → 42 − 6 = 36。
+两处都被替换，说明**术语表在工具管道与 🔊 管道共用的 `toSpeakable → applyTerms` 上真的生效**，
+配置改完无需重启（纯配置项，符合 §17.1 的结论）。
+
+### 18.4 `applyTerms` 的匹配语义（实测，含一个已知风险）
+
+直接对 `lib/speakable.js` 做调用探测：
+
+| 键 | 文本 | 结果 |
+|---|---|---|
+| `Markdown` | `ttsFilterMarkdown` | 命中 → `ttsFilter【Markdown】`（标识符内部也会替换） |
+| `Markdown` | `markdown` | 不命中 —— **大小写敏感** |
+| `AI` | `OPENAI` | 命中 → `OPEN【AI】`（**短词会撞进更长的英文单词**） |
+| `ttsFilterMarkdown` + `Markdown` | 两者同时出现 | 长词优先，标识符整体先被吃掉 |
+
+结论：替换是**纯子串、大小写敏感、长词优先**。对 TTS 而言「标识符内部也替换」是想要的
+（朗读文本没有语法，替换只为发音）；真正的风险只有**≤2 字符的短键**（`AI`/`ML`/`Go`）会撞进
+`OPENAI`、`Golang` 这类更长单词。可用的临时规避：键里自带边界（写 `" AI "` 并在替换值里补空格）。
+是否给短键加「ASCII 词边界」判定，待定（见 §18.5）。
+
+### 18.5 尚未决定
+
+1. 短键是否加边界判定（改动小，纯函数体，可热重载；需补 2 个用例）；
+2. `chatbot_upload_document(path, purpose)`（Files API → `file_id`）是否要加；
+3. 是否在 `deepseek-ai/DeepSeek-V3` 用 `feature_request` 公开提 TTS 反馈（草稿在
+   `docs/feedback-tts-code-switch.md`，同一内容已邮件发至 `api-service@deepseek.com`）。
+
+以上三项已全部拍板（用户 2026-11-17）：短键加词边界 ✅、加 `chatbot_upload_document` ✅、
+**不发公开 issue**（邮件已够）✅。
+
+## 19. r19 图片守卫端到端验证（2026-11-17T15:42Z，折叠恢复后）
+
+### 19.1 目的
+
+验证 `non-text-tool-result` 守卫能真正阻止事故 2 的 400
+（`messages.94: only text content is supported in tool_result blocks with … safety_check …`）。
+事故教训见 `docs/incident-2026-11-17-tool-result-image.md`。
+
+### 19.2 方法
+
+**不在主会话直接 `read_image`** —— 万一守卫失效会把主会话也写死（历史一旦持久化就无法回滚）。
+改用一次性子代理 `img-guard-probe`，爆炸半径隔离：它只做一次 `read_image`，然后报告。
+
+图片：`~/.dsh/attachments/v1/objects/74/7409943…6480a7`（PNG，magic `89504e47`）。
+
+### 19.3 结果
+
+审计日志 `~/.dsh/logs/chatbot-tools-safety.ndjson` 逐条对上：
+
+```
+15:42:13.719Z  toolCount:290  deferredCount:0  serverFields:[]  nonTextResults:1  decision:"non-text-tool-result"
+15:42:17.598Z  toolCount:290  deferredCount:0  serverFields:[]  nonTextResults:0  decision:"enforce"
+```
+
+- 第一条 = 子代理那次 `read_image` 之后的请求：`nonTextResults:1` → 守卫命中 → **跳过 `safety_check`**；
+- 第二条 = 紧随其后的请求：图片已不在请求体内 → 计数归 0 → **恢复 `enforce`**（内容安全自动回到全开）；
+- 宿主日志 `desktop-next-2026-11-17.0.jsonl` 中**没有**新增 `only text content is supported`
+  或 `agent.failed`；
+- 子代理正常返回 `RESULT: success`，并且**描述准确**：绿色 PCB、丝印 `P3.7–P3.0` / `P2.7–P2.0`、
+  蓝色顶面微调电位器、丝印 `C12`/`R40`/`R36`、一排 `Q1`…`Q9` 黑色三脚贴片器件。
+
+结论：**守卫按设计工作**——含非文本 `tool_result` 的那一次请求退让，其余请求照常带内容安全；
+会话全程存活。事故 2 的根因通道已被闭合。
+
+### 19.4 一个与交接档不符的观察（以观察为准）
+
+交接档 002 记「本会话 `deferredCount:1`、`safety_check` 全程跳过」。折叠后实测 **`deferredCount:0`**，
+且 `decision:"enforce"`。
+
+即 `toolDeclarations()` 给「会话中途新增工具」打的 `deferLoading` 标记**并非永久**：折叠
+（compaction 重写历史）之后它消失了。仅 `purpose:"compaction"` 那一次请求仍报
+`deferredCount:1`（压缩请求用的是另一套声明集）。
+
+含义：`defer_loading` × `safety_check` 的互斥是**可自愈**的，重启或折叠后都会恢复，
+不需要为了它牺牲内容安全；但它仍是服务端真实约束，已写入给官方的反馈（§20）。
+
+## 20. 已知服务端约束汇总（`safety_check` 三条互斥，全部已有守卫）
+
+`deepseekLlmApiExtensions.register('safety_check')` 一旦注入 `request.body`，服务端就会对
+**整个请求**施加排他性校验。踩中任何一条都返回 400，而且**历史已持久化后无法重试自救**——
+所以每条约束都必须先变成守卫 + 单测，再上线。
+
+| # | 约束 | 触发条件 | 错误信息 | 守卫 | 文档 |
+|---|---|---|---|---|---|
+| 1 | 不能有延迟加载工具 | 请求体内有 `defer_loading: true` 的工具声明（DSH 给「会话中途新增的工具」打此标记） | 相关 tool 声明被拒 | `defer-loading-guard` | `incident-2026-11-17-safety-check-defer-loading.md` |
+| 2 | 不能在非思考模式 | `thinking: disabled`（含 `purpose` 为标题生成等辅助请求） | — | `thinking-off` / `purpose-skip` | 同上 |
+| 3 | `tool_result` 只能纯文本 | 历史里任一 `tool_result` 的 `content` 数组含非 `text` 成员（图片、文件等） | `messages.NN: only text content is supported in tool_result blocks with deepseek_web_search, deepseek_read_url, safety_check or title yet` | `non-text-tool-result`（本次新增） | `incident-2026-11-17-tool-result-image.md` |
+
+守卫优先级（`lib/safety.js` 的 `decide()`）：
+`mode-off` → `purpose-skip` → `thinking-off` → `non-text-tool-result` → `defer-loading-guard` → `observe` → `enforce`。
+
+三条互斥字段 `deepseek_web_search` / `deepseek_read_url` / `safety_check` / `title` 中，
+**没有一个**是 DSH 核心注入的（审计字段 `serverFields: []` 在每次 `enforce` 请求上都是空数组，
+且 `grep -c deepseek_web_search app.asar` = 0），所以第三方插件只要用 `safety_check`，
+就必须自己承担上面三条的全部守卫义务。
+
+已按用户决定：不发公开 issue，三条约束合并成一封邮件发 `api-service@deepseek.com`（续上一封 TTS 反馈）。

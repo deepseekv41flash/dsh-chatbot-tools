@@ -1,0 +1,20 @@
+# dsh-chatbot-tools — bundle patch 层。
+# 有这一层，插件才有「包身份」：会出现在 设置 → 插件 列表里，可被插件管理器
+# 识别、启停与升级；只靠运行时 loader.create 注入的匿名 entry 不会出现在那里。
+- insert:
+    - id: dsh-chatbot-tools
+      name: 'dsh-chatbot-tools'
+      inject:
+        - tools
+      config:
+        # 内容安全三态：off / observe / enforce
+        safetyMode: enforce
+        safetyLevel: high
+        safetyGuardDeferLoading: true
+        safetySkipPurposes:
+          - title
+          - session-title
+        safetyLog: true
+        model: deepseek-flash
+        serverTool: deepseek_web_search
+        maxUses: 1

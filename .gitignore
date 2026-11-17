@@ -1,0 +1,7 @@
+node_modules/
+*.tgz
+*.tsbuildinfo
+.DS_Store
+
+# 开发期交接笔记，不进公开仓库
+HANDOFF.md
