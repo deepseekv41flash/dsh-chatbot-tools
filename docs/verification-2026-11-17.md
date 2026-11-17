@@ -730,3 +730,75 @@ ctx.on('llm/stream', (_options, next) => refusalGuardStream(next, live().refusal
 再让**另一个独立 profile 的 DSH 实例**指向它跑一轮。这需要额外一套运行环境，本轮没做——
 所以「拦截分支」现在的准确表述是：**分支行为已被确定性测试与变异测试覆盖，
 但没有真实拒答的实机证据**。
+
+## 25. 真实端到端：拒答中间件此前**从未生效过**（2026-11-18，重大纠正）
+
+### 25.1 做法：本地 mock 服务 + 一次性 profile
+
+用户提供了一个空闲的独立 DSH 实例作思路，但更干净的做法是不碰任何现有 profile：
+
+1. 起一个本地 mock Messages 服务（`~/.dsh/tmp/mock-messages.mjs`），按官方文档吐两种被拦形态；
+2. 复制 `headless` profile 为一次性的 `probe`，用 `dsh plugin --profile probe add <tgz>` 装本插件；
+3. 用 `dsh probe --patch <overlay.yml>` 启动 —— `--patch` 只在本条命令生效，
+   overlay 里把 `llm-deepseek`（注意：api-key 那条 provider 的 entry id 是 `llm-deepseek`，
+   `llm-deepseek-api-key` 只是包名/日志名）和 `llm-deepseek-account` 的 `baseURL` 指向 mock，
+   同时把本插件的 `refusalNotice` 打开。
+
+全程没有构造任何违规内容，也没有试探供应商的审核边界。
+
+### 25.2 实测到的两种真实形态
+
+| 形态 | DSH 实际交付 |
+|---|---|
+| 输出侧拒答 | **不抛异常**，而是 `finish` chunk：`{type:'finish', reason:{kind:'error', failure:{code:'MALFORMED_RESPONSE', message:'DeepSeek Messages stream: unsupported stop reason refusal'}}}`；CLI 打印 `dsh: MALFORMED_RESPONSE: …` |
+| 输入未过审 | 同样是 `finish` 失败：`{kind:'error', failure:{code:'INVALID_REQUEST', message:'Content Exists Risk'}}`；CLI 打印 `dsh: INVALID_REQUEST: Content Exists Risk` |
+
+关键结论：**`FinishReasonMap` 里没有 `refusal` 这一种**（只有 stop / tool-calls /
+max-tokens / aborted / error），适配器把拒答降级成 `kind:'error'`。
+
+### 25.3 因此这是一个真 bug，而非“缺证据”
+
+原中间件只 `catch` 抛出的异常。而 DSH 把失败作为 `finish` chunk 交付 ——
+**这条拦截分支在真实环境从未执行过**，用户看到的永远是原始报错。
+前几轮文档里「拦截分支只有单测覆盖」的表述低估了问题：不是“没证据”，是“实现没接上”。
+
+修法：
+
+```js
+if (enabled && isRefusalFailureChunk(chunk)) {   // finish + kind:'error' + failure 命中拒答
+  yield* emit(REFUSAL_NOTICE[refusalKind(chunk.reason.failure)])
+  return
+}
+```
+
+同时保留 `catch` 兜住真的抛异常的适配器；新块的索引用 `lastIndex + 1`，避免与已下发的块撞车。
+新增 `isRefusalFailureChunk()` 与 5 条「真实形态」用例（`test/refusal-stream.test.mjs` 共 16 例）。
+
+### 25.4 端到端结果
+
+```
+$ dsh probe --patch overlay.yml "请只回答两个字：收到"
+⚠️ 该回答已被 DeepSeek 内容安全策略拦截（refusal）。可在 设置 → 插件 → dsh-chatbot-tools 里调整内容安全开关后重试。
+
+# mock 切到 400 模式后
+$ dsh probe --patch overlay.yml "请只回答两个字：收到"
+⚠️ 这条输入未通过 DeepSeek 内容安全审核（HTTP 400 Content Exists Risk），模型没有作答。可在 设置 → 插件 → dsh-chatbot-tools 里关闭内容安全后重试。
+```
+
+两种形态都由中间件接管并输出对应文案 —— **这是第一次拿到真实实机证据**。
+
+### 25.5 两个被证伪的假设（避免以后重走）
+
+1. **「`ctx.on('llm/stream')` 注册顺序导致中断」——错。** 当时依据是 probe 里 `toolCount=31`
+   且工具“看起来没注册”。实际 headless 基底 24 个工具 + 本插件 7 个 = 31，工具一直是注册上的。
+   那个误判源于诊断代码自身的 bug：`note()` 里用了 ESM 不允许的 `require('node:fs')`，
+   异常被自己的 `catch` 吞掉，日志全空，被我读成“生成器没被调用”。
+   → 教训：**诊断代码本身也要验证**，否则会用“没有日志”推出错误结论。
+   （`optional()` 隔离仍然保留，它是防御性的，但**不是**本次修复的原因。）
+2. **「适配器会抛异常」——错。** 见 25.2。
+
+### 25.6 仍未覆盖
+
+`llm/stream` 之外的路径（例如未来 DSH 改用别的失败交付方式）没有覆盖；如果上游把拒答
+改成 `finish: {kind:'aborted'}` 或新增 `refusal` 这个 kind，需要再对一次。当前实现对
+`kind:'error'` 的 `failure.message` 做匹配，属于「按文案识别」，上游改文案就会失效。

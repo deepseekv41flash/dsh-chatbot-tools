@@ -3,6 +3,39 @@
 本文件记录本插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-11-18
+
+### 修复（重要：拒答兜底此前从未生效）
+
+- **拒答中间件只 `catch` 抛出的异常，但 DSH 并不抛异常。** 端到端实测（本地 mock Messages
+  服务 + 一次性 profile）发现：适配器把失败作为 `finish` chunk 交付——
+  `{type:'finish', reason:{kind:'error', failure:{code:'MALFORMED_RESPONSE',
+  message:'DeepSeek Messages stream: unsupported stop reason refusal'}}}`，
+  输入未过审则是 `{code:'INVALID_REQUEST', message:'Content Exists Risk'}`。
+  `FinishReasonMap` 里根本没有 `refusal` 这一种。
+  因此这条分支在真实环境**一次都没执行过**，用户看到的永远是原始报错。
+- 现改为同时识别 `finish` 失败 chunk（`isRefusalFailureChunk()`），命中后用提示替换该 chunk；
+  同时保留 `catch` 兜住真抛异常的适配器。新块索引用 `lastIndex + 1`，不与已下发的块撞车。
+
+### 测试
+
+- `test/refusal-stream.test.mjs` 扩到 16 例，新增 5 例覆盖**真实形态**（finish 失败而非抛异常）。
+- 单测合计 `29 + 18 + 31 + 16 = 94` 项。
+
+### 验证
+
+- 端到端（`dsh probe --patch overlay.yml`，overlay 把 provider 指向 mock）：
+  - 拒答模式 → `⚠️ 该回答已被 DeepSeek 内容安全策略拦截（refusal）…`
+  - 400 模式 → `⚠️ 这条输入未通过 DeepSeek 内容安全审核（HTTP 400 Content Exists Risk）…`
+- 全程未构造任何违规内容，也未试探供应商的审核边界。经过见 `docs/verification-2026-11-17.md` §25。
+
+### 硬化
+
+- 可选服务（`deepseekLlmApiExtensions` / `speechToText` / `webServer`）的注册各自隔离，
+  任何一步失败都记 `optional-failed:<label>` 而不中断 apply。
+  （说明：这不是本次拒答失效的原因——`toolCount` 证明工具一直注册成功；
+  保留它是防御性的，见 §25.5。）
+
 ## [0.3.3] - 2026-11-18
 
 ### 重构（可测性）

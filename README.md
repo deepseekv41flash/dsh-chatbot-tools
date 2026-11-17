@@ -194,19 +194,17 @@ dsh plugin --profile desktop add link:C:/Users/Admin/dsh-chatbot-tools
   插件已在本地前置拦截并给出可执行建议，不再把服务端那句含糊报错直接丢给模型。
 - ✅ 卸载：工具立即消失、registry 清空、junction 删除（详见验证文档 §7）
 - ✅ 插件页可见：bundle 安装后 `list_bundles` 出现且 `installed:true`
-- ✅ 单元测试：`npm test` → 29 + 18 + 31 + 11 项全绿
-- ✅ 拒答中间件已抽成可测的纯生成器 `refusalGuardStream`，**拦截分支被 11 例确定性驱动**
-  （关闭透传 / 输出侧拒答 / 输入未过审 / 图片被拦 / 限流与网络错误不得被误判 / 兜底 chunk 结构），
-  并做过**变异测试**：删掉匹配器或透传分支都会让测试 FAIL
+- ✅ 单元测试：`npm test` → 29 + 18 + 31 + 16 项全绿
 - ✅ Files API 上传失败的 400 按**报错文案**细分（文件数量上限 / 存储配额 / 不受支持 / 图片过大 /
   有密码 / 无法解析），规则取自官方演示客户端 `chat-demo` 的 `src/services/api/errors.ts`
-- ✅ 拒答的**两种**官方形态都已实现识别：输出侧 `stop_reason: refusal` 与输入侧
-  `400 Content Exists Risk`（含图片被拦的解释文本）；另有 4 条防误判用例
-  （`max_tokens` 截断 / 网络错误 / `safety_check` 字段非法 / 限流 都必须判成「不是拒答」）
-- ⚠️ **真实拒答仍未能触发**：实测 5 个类别（钓鱼、暴力威胁、伪造证件、侮辱群体、
-  以及去掉 `safety_check` 的对照）全部返回 200 + `end_turn` + `safety_tokens: 0`。
-  所以拦截分支**没有真实拒答的实机证据**（分支行为本身已被上面的确定性测试覆盖）。
-  证据见 `docs/verification-2026-11-17.md` §22 与 §24。
+- ✅ **拒答兜底已端到端实测**（本地 mock Messages 服务 + 一次性 profile，不碰任何现有实例）：
+  - 输出侧拒答 → 显示「该回答已被 DeepSeek 内容安全策略拦截（refusal）…」
+  - 输入未过审 → 显示「这条输入未通过 DeepSeek 内容安全审核（HTTP 400 Content Exists Risk）…」
+  - 4 条防误判用例（`max_tokens` / 网络错误 / `safety_check` 字段非法 / 限流）必须判成「不是拒答」
+- ⚠️ 这条链路此前**从未生效过**：DSH 把适配器失败作为 `finish` chunk 交付
+  （`{kind:'error', failure:{code:'MALFORMED_RESPONSE', …}}`），而原实现只 `catch` 抛出的异常。
+  0.4.0 已改为同时识别 finish 失败 chunk。整段经过见 `docs/verification-2026-11-17.md` §25。
+- ⚠️ 识别方式是匹配 `failure.message` 文案；上游改文案会失效（见 §25.6）
 
 ## 服务端约束（都不是文档写明的）
 

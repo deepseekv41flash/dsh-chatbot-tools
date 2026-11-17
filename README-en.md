@@ -190,25 +190,21 @@ See `docs/verification-2026-11-17.md`. Summary:
   server's vague error through to the model.
 - ✅ Uninstall: tools vanish immediately, registry cleared, junction removed (verification doc §7)
 - ✅ Shows up on the Plugins page after bundle install (`installed:true`)
-- ✅ Unit tests: `npm test` → 29 + 18 + 31 + 11 checks green
-- ✅ The refusal middleware is now a pure, testable generator (`refusalGuardStream`);
-  **the interception branch is driven deterministically by 11 cases** (passthrough when off,
-  output-side refusal, input-side block, blocked images, rate-limit/network errors must not be
-  mistaken for a refusal, fallback chunk structure). Mutation-tested: deleting the matcher or the
-  passthrough branch makes the suite FAIL.
+- ✅ Unit tests: `npm test` → 29 + 18 + 31 + 16 checks green
 - ✅ Files API upload failures are classified from the **error text**, not just the status code
   (file-count limit / storage quota / unsupported / image too large / password-protected /
   unparsable); the patterns come from the official demo client's `src/services/api/errors.ts`
-- ✅ Both documented refusal shapes are recognised: output-side `stop_reason: refusal` and
-  input-side `400 Content Exists Risk` (including the blocked-image explanation). Four negative
-  cases guard against false positives (`max_tokens`, network error, an invalid `safety_check`
-  field, and rate limiting must all read as *not* a refusal).
-- ⚠️ **A real refusal still could not be triggered**: five categories (phishing, violent threat,
-  document forgery, hate speech, plus a no-`safety_check` control) all returned 200 + `end_turn` +
-  `safety_tokens: 0`. So the interception branch has **no live evidence from a real refusal**
-  (the branch behaviour itself is covered by the deterministic tests above).
-  Evidence: `docs/verification-2026-11-17.md` §22 and §24.
-
+- ✅ **Refusal handling is verified end-to-end** (local mock Messages server + a throwaway profile;
+  no existing instance touched):
+  - output-side refusal → shows "该回答已被 DeepSeek 内容安全策略拦截（refusal）…"
+  - input-side block → shows "这条输入未通过 DeepSeek 内容安全审核（HTTP 400 Content Exists Risk）…"
+  - four negative cases (`max_tokens`, network error, invalid `safety_check` field, rate limiting)
+    must all read as *not* a refusal
+- ⚠️ This path **never worked before 0.4.0**: DSH delivers adapter failures as a `finish` chunk
+  (`{kind:'error', failure:{code:'MALFORMED_RESPONSE', …}}`), while the old code only caught thrown
+  exceptions. 0.4.0 also recognises the finish-failure chunk. Full story:
+  `docs/verification-2026-11-17.md` §25.
+- ⚠️ Detection matches `failure.message` text; an upstream wording change would break it (§25.6).
 ## Server-side constraints (none of them documented)
 
 Once `deepseekLlmApiExtensions.register('safety_check')` injects `safety_check`, the server enforces

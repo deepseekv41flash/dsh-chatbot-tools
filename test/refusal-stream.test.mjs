@@ -4,7 +4,7 @@
 // 所以「拦截分支」以前只能靠看代码推断。抽出成纯生成器后，可以用「抛一个带真实文案的
 // 错误」确定性地驱动它，验证它**到底 yield 了什么**。
 import assert from 'node:assert/strict'
-import { refusalGuardStream, refusalKind, isRefusalError, REFUSAL_NOTICE } from '../lib/safety.js'
+import { refusalGuardStream, refusalKind, isRefusalError, isRefusalFailureChunk, REFUSAL_NOTICE } from '../lib/safety.js'
 
 /** 下游流：先吐两个 chunk 再抛错。 */
 const throwing = (error) => async function* () {
@@ -29,22 +29,64 @@ const INPUT_BLOCKED = new Error('DeepSeek Messages API error 400: {"error":{"mes
 const IMAGE_BLOCKED = new Error('The following images were blocked by content moderation: messages.1.content.0')
 const RATE_LIMIT = new Error('429 rate_limit_exceeded')
 
+/** 2026-11-18 端到端实测到的真实形状：空 text 块先到，随后是 finish 失败（不抛异常）。 */
+const refusalFinishStream = (message, code = 'MALFORMED_RESPONSE') => async function* () {
+  yield { type: 'block-start', index: 0, blockType: 'text' }
+  yield { type: 'block-end', index: 0, block: { type: 'text', text: '' } }
+  yield { type: 'finish', reason: { kind: 'error', failure: { message, code } } }
+}
+
 const cases = [
+  // ── 真实形态：拒答以 finish 失败交付，不是抛异常 ──────────────────────────
+  ['真实形态：finish 失败被改写成提示', async () => {
+    const chunks = await collect(refusalGuardStream(refusalFinishStream('DeepSeek Messages stream: unsupported stop reason refusal')(), true))
+    assert.equal(chunks.length, 6, '2 个原 chunk（空 text 块）+ 3 个提示 chunk + 1 个 finish')
+    assert.equal(chunks[2].type, 'block-start', '原 finish 失败应被替换掉，不得外泄')
+    const tail = chunks.slice(-4)
+    assert.equal(tail[0].type, 'block-start')
+    assert.equal(tail[0].index, 1, '新块索引接在已用索引之后')
+    assert.equal(tail[1].text, REFUSAL_NOTICE.output)
+    assert.equal(tail[2].block.text, REFUSAL_NOTICE.output)
+    assert.deepEqual(tail[3], { type: 'finish', reason: { kind: 'stop' } })
+  }],
+  ['真实形态：输入未过审的 finish 失败用「输入」文案', async () => {
+    const chunks = await collect(refusalGuardStream(refusalFinishStream('Content Exists Risk', 'INVALID_REQUEST')(), true))
+    assert.equal(chunks[chunks.length - 3].text, REFUSAL_NOTICE.input)
+  }],
+  ['真实形态：非拒答的 finish 失败原样透传', async () => {
+    const chunks = await collect(refusalGuardStream(refusalFinishStream('429 rate_limit_exceeded', 'RATE_LIMIT')(), true))
+    assert.equal(chunks.length, 3, '不得追加任何提示')
+    assert.equal(chunks[2].reason.kind, 'error')
+  }],
+  ['真实形态：关闭时 finish 失败也原样透传', async () => {
+    const chunks = await collect(refusalGuardStream(refusalFinishStream('DeepSeek Messages stream: unsupported stop reason refusal')(), false))
+    assert.equal(chunks.length, 3)
+    assert.equal(chunks[2].reason.failure.code, 'MALFORMED_RESPONSE')
+  }],
+  ['isRefusalFailureChunk 只认 finish 失败里的拒答', () => {
+    assert.equal(isRefusalFailureChunk({ type: 'finish', reason: { kind: 'error', failure: { message: 'unsupported stop reason refusal' } } }), true)
+    assert.equal(isRefusalFailureChunk({ type: 'finish', reason: { kind: 'error', failure: { message: 'Content Exists Risk' } } }), true)
+    assert.equal(isRefusalFailureChunk({ type: 'finish', reason: { kind: 'stop' } }), false)
+    assert.equal(isRefusalFailureChunk({ type: 'finish', reason: { kind: 'error', failure: { message: '429' } } }), false)
+    assert.equal(isRefusalFailureChunk({ type: 'text-delta' }), false)
+    assert.equal(isRefusalFailureChunk(undefined), false)
+  }],
+
   // ── 关闭：必须原样透传，连异常都不能碰 ────────────────────────────────────
   ['关闭时正常流原样透传', async () => {
-    const chunks = await collect(refusalGuardStream(normal, false))
+    const chunks = await collect(refusalGuardStream(normal(), false))
     assert.deepEqual(chunks, [
       { type: 'text-delta', index: 0, text: '正常' },
       { type: 'finish', reason: { kind: 'stop' } },
     ])
   }],
   ['关闭时拒答异常照常抛出（不吞）', async () => {
-    await assert.rejects(() => collect(refusalGuardStream(throwing(ADAPTER_REFUSAL), false)), /unsupported stop reason refusal/)
+    await assert.rejects(() => collect(refusalGuardStream(throwing(ADAPTER_REFUSAL)(), false)), /unsupported stop reason refusal/)
   }],
 
   // ── 开启 + 正常：一个 chunk 都不能变 ──────────────────────────────────────
   ['开启时正常流原样透传', async () => {
-    const chunks = await collect(refusalGuardStream(normal, true))
+    const chunks = await collect(refusalGuardStream(normal(), true))
     assert.deepEqual(chunks, [
       { type: 'text-delta', index: 0, text: '正常' },
       { type: 'finish', reason: { kind: 'stop' } },
@@ -53,39 +95,40 @@ const cases = [
 
   // ── 开启 + 输出侧拒答：已下发的 chunk 保留，再补一段提示并收尾 ────────────
   ['输出侧拒答：保留已下发内容并追加提示', async () => {
-    const chunks = await collect(refusalGuardStream(throwing(ADAPTER_REFUSAL), true))
+    const chunks = await collect(refusalGuardStream(throwing(ADAPTER_REFUSAL)(), true))
     assert.equal(chunks.length, 5, '一个已下发 chunk + 4 个兜底 chunk')
     assert.deepEqual(chunks[0], { type: 'text-delta', index: 0, text: '前半段' })
-    assert.deepEqual(chunks[1], { type: 'block-start', index: 0, blockType: 'text' })
+    // 已下发的 chunk 占用了索引 0（且上游没有 block-end），提示块顺延到索引 1，避免撞车。
+    assert.deepEqual(chunks[1], { type: 'block-start', index: 1, blockType: 'text' })
     assert.equal(chunks[2].type, 'text-delta')
     assert.equal(chunks[2].text, REFUSAL_NOTICE.output)
-    assert.deepEqual(chunks[3], { type: 'block-end', index: 0, block: { type: 'text', text: REFUSAL_NOTICE.output } })
+    assert.deepEqual(chunks[3], { type: 'block-end', index: 1, block: { type: 'text', text: REFUSAL_NOTICE.output } })
     assert.deepEqual(chunks[4], { type: 'finish', reason: { kind: 'stop' } })
   }],
 
   // ── 开启 + 输入未过审：文案必须与输出侧不同（模型根本没作答） ─────────────
   ['输入未过审：用「输入」文案', async () => {
-    const chunks = await collect(refusalGuardStream(throwing(INPUT_BLOCKED), true))
+    const chunks = await collect(refusalGuardStream(throwing(INPUT_BLOCKED)(), true))
     assert.equal(chunks[2].text, REFUSAL_NOTICE.input)
     assert.notEqual(REFUSAL_NOTICE.input, REFUSAL_NOTICE.output, '两种形态的文案必须可区分')
     assert.ok(chunks[2].text.includes('400'), '输入侧提示应点明是 400')
   }],
   ['图片被拦：同样按「输入」处理', async () => {
-    const chunks = await collect(refusalGuardStream(throwing(IMAGE_BLOCKED), true))
+    const chunks = await collect(refusalGuardStream(throwing(IMAGE_BLOCKED)(), true))
     assert.equal(chunks[2].text, REFUSAL_NOTICE.input)
   }],
 
   // ── 开启 + 非拒答错误：必须原样抛出，不能被伪装成「被拦截」 ───────────────
   ['开启时限流错误照常抛出', async () => {
-    await assert.rejects(() => collect(refusalGuardStream(throwing(RATE_LIMIT), true)), /rate_limit_exceeded/)
+    await assert.rejects(() => collect(refusalGuardStream(throwing(RATE_LIMIT)(), true)), /rate_limit_exceeded/)
   }],
   ['开启时网络错误照常抛出', async () => {
-    await assert.rejects(() => collect(refusalGuardStream(throwing(new Error('fetch failed')), true)), /fetch failed/)
+    await assert.rejects(() => collect(refusalGuardStream(throwing(new Error('fetch failed'))(), true)), /fetch failed/)
   }],
 
   // ── 兜底 chunk 必须构成一段合法文本块（start→delta→end→finish） ───────────
   ['兜底 chunk 结构完整可渲染', async () => {
-    const chunks = await collect(refusalGuardStream(throwing(ADAPTER_REFUSAL), true))
+    const chunks = await collect(refusalGuardStream(throwing(ADAPTER_REFUSAL)(), true))
     const tail = chunks.slice(-4)
     assert.equal(tail[0].type, 'block-start')
     assert.equal(tail[0].blockType, 'text')
