@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { extensionOf, isPlainTextFile, purposeFormatError, PLAIN_TEXT_EXTENSIONS } from '../lib/files.js'
+import { extensionOf, isPlainTextFile, purposeFormatError, uploadFailureHint, PLAIN_TEXT_EXTENSIONS } from '../lib/files.js'
 
 const cases = [
   // ── extensionOf ────────────────────────────────────────────────────────────
@@ -59,6 +59,54 @@ const cases = [
       assert.ok(ext.startsWith('.'), `${ext} 应以点开头`)
     }
   }],
+
+  // ── uploadFailureHint：文案细分规则对齐官方 chat-demo 的 errors.ts ──────────
+  [
+    '400 文件数量上限',
+    () => {
+      const hint = uploadFailureHint(400, 'User file count limit exceeded, limit 100')
+      assert.ok(hint.includes('100'), '应带出上限数值')
+      assert.ok(hint.includes('数量'))
+    },
+  ],
+  [
+    '400 存储配额上限',
+    () => {
+      const hint = uploadFailureHint(400, 'User storage quota exceeded, limit 10.5 GB')
+      assert.ok(hint.includes('10.5 GB'))
+      assert.ok(hint.includes('配额'))
+    },
+  ],
+  [
+    '400 不受支持/损坏',
+    () => assert.ok(uploadFailureHint(400, 'You have uploaded an invalid image').includes('不受支持')),
+  ],
+  [
+    '400 图片过大',
+    () => assert.ok(uploadFailureHint(400, 'The image is too large to process').includes('过大')),
+  ],
+  [
+    '400 有密码保护',
+    () => assert.ok(uploadFailureHint(400, 'the file is password-protected').includes('密码')),
+  ],
+  [
+    '400 无法解析（指向 user_data）',
+    () => {
+      const hint = uploadFailureHint(400, 'Failed to recognize the file: the file format is not supported')
+      assert.ok(hint.includes('user_data'), '纯文本场景应提示改用 user_data')
+    },
+  ],
+  [
+    '400 未知文案给兜底建议',
+    () => {
+      const hint = uploadFailureHint(400, 'totally unknown failure')
+      assert.ok(hint.includes('purpose'), '兜底应提示检查 purpose')
+    },
+  ],
+  ['429 命中并发上限', () => assert.ok(uploadFailureHint(429, '').includes('15'))],
+  ['503 提示稍后重试', () => assert.ok(uploadFailureHint(503, '').includes('稍后'))],
+  ['非失败状态没有提示', () => assert.equal(uploadFailureHint(200, ''), '')],
+  ['未收录的状态码不瞎猜', () => assert.equal(uploadFailureHint(418, 'teapot'), '')],
 ]
 
 let passed = 0

@@ -95,7 +95,7 @@ dsh plugin --profile desktop add link:C:/Users/Admin/dsh-chatbot-tools
 | `apiKeyRef` | `DEEPSEEK_API_KEY` | 宿主凭据服务里的 key 名；DSH 设置里存过的 Key 就在这里 |
 | `safetyEnabled` | `false` | **内容安全总开关，默认关闭**。关闭时完全不注入 `safety_check`，DSH 能力不受限制 |
 | `safetyMode` | `enforce` | 总开关打开后的模式：`off` / `observe`（只记录）/ `enforce`（注入 `safety_check`） |
-| `refusalNotice` | `false` | **拒答提示开关，默认关闭**。关闭时 refusal 保持 DSH 原始行为；开启后才把抛错换成可读提示 |
+| `refusalNotice` | `false` | **拒答提示开关，默认关闭**。关闭时 refusal 保持 DSH 原始行为；开启后才把抛错换成可读提示。注意开启后这一轮会变成一条正常回答并进入上下文，而官方 demo 是丢弃正文且不回传（见 `docs/verification-2026-11-17.md` §23） |
 | `safetyLevel` | `high` | `high` / `low` |
 | `safetyGuardDeferLoading` | `true` | **保持开启**：请求带 `defer_loading` 时跳过注入（事故守卫） |
 | `safetySkipPurposes` | `['title','session-title']` | 内部请求不注入，省费用 |
@@ -194,7 +194,9 @@ dsh plugin --profile desktop add link:C:/Users/Admin/dsh-chatbot-tools
   插件已在本地前置拦截并给出可执行建议，不再把服务端那句含糊报错直接丢给模型。
 - ✅ 卸载：工具立即消失、registry 清空、junction 删除（详见验证文档 §7）
 - ✅ 插件页可见：bundle 安装后 `list_bundles` 出现且 `installed:true`
-- ✅ 单元测试：`npm test` → 29 + 18 + 20 项全绿
+- ✅ 单元测试：`npm test` → 29 + 18 + 31 项全绿
+- ✅ Files API 上传失败的 400 按**报错文案**细分（文件数量上限 / 存储配额 / 不受支持 / 图片过大 /
+  有密码 / 无法解析），规则取自官方演示客户端 `chat-demo` 的 `src/services/api/errors.ts`
 - ✅ 拒答的**两种**官方形态都已实现识别：输出侧 `stop_reason: refusal` 与输入侧
   `400 Content Exists Risk`（含图片被拦的解释文本）；另有 4 条防误判用例
   （`max_tokens` 截断 / 网络错误 / `safety_check` 字段非法 / 限流 都必须判成「不是拒答」）

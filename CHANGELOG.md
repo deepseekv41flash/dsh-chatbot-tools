@@ -3,6 +3,23 @@
 本文件记录本插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.2] - 2026-11-18
+
+### 改进
+
+- **Files API 上传失败按文案细分**。原 `uploadHint(status)` 只看状态码，所有 400 都是同一句笼统提示；
+  现改为 `uploadFailureHint(status, detail)`，规则取自官方演示客户端
+  `deepseek-ai/chat-demo` 的 `src/services/api/errors.ts`：文件数量上限、存储配额上限、
+  不受支持/损坏、图片过大、有密码保护、无法解析。新增 11 条用例。
+
+### 文档
+
+- 新增 `docs/verification-2026-11-17.md` §23：官方**没有**拒答触发指南（只讲怎么处理），
+  但官方 demo 把行为定死了——`settleReply` 在被拒答时丢弃思考与正文、只保留工具块，
+  `canContinueReply` 禁止续写，`isUsableReply` 让被拒答的轮次**不进上下文**。
+- 据此记录一处行为分歧：本插件的 `refusalNotice` 会把拒答变成一条正常回答并进入上下文，
+  与官方语义不同。这也是它默认关闭的又一个理由。
+
 ## [0.3.1] - 2026-11-18
 
 ### 修复

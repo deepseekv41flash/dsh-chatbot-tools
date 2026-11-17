@@ -95,7 +95,7 @@ Override in the profile patch `config` (a patch row **replaces** the bundle conf
 | `apiKeyRef` | `DEEPSEEK_API_KEY` | Key name in the host credential service |
 | `safetyEnabled` | `false` | **Master switch, off by default.** When off, `safety_check` is never injected and DSH is unrestricted |
 | `safetyMode` | `enforce` | Mode used once the master switch is on: `off` / `observe` (log only) / `enforce` |
-| `refusalNotice` | `false` | **Off by default.** When off, refusals keep DSH's native behaviour |
+| `refusalNotice` | `false` | **Off by default.** When off, refusals keep DSH's native behaviour. Note that turning it on turns the refusal into a normal answer that enters the context, whereas the official demo discards the text and does not send the turn back (see `docs/verification-2026-11-17.md` §23) |
 | `safetyLevel` | `high` | `high` / `low` |
 | `safetyGuardDeferLoading` | `true` | **Keep on**: skip injection when the request has `defer_loading` |
 | `safetySkipPurposes` | `['title','session-title']` | Skip internal requests to save cost |
@@ -190,7 +190,10 @@ See `docs/verification-2026-11-17.md`. Summary:
   server's vague error through to the model.
 - ✅ Uninstall: tools vanish immediately, registry cleared, junction removed (verification doc §7)
 - ✅ Shows up on the Plugins page after bundle install (`installed:true`)
-- ✅ Unit tests: `npm test` → 29 + 18 + 20 checks green
+- ✅ Unit tests: `npm test` → 29 + 18 + 31 checks green
+- ✅ Files API upload failures are classified from the **error text**, not just the status code
+  (file-count limit / storage quota / unsupported / image too large / password-protected /
+  unparsable); the patterns come from the official demo client's `src/services/api/errors.ts`
 - ✅ Both documented refusal shapes are recognised: output-side `stop_reason: refusal` and
   input-side `400 Content Exists Risk` (including the blocked-image explanation). Four negative
   cases guard against false positives (`max_tokens`, network error, an invalid `safety_check`

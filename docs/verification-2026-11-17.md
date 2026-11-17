@@ -599,3 +599,64 @@ document 块——它只负责把文件变成 `file_id` 并告知引用方式。
 ```
 
 即「插件页开关 → settings 服务 → profile patch」这条链路端到端通了，不只是界面状态。
+
+## 23. 官方有没有「拒答测试指南」？——没有，但有更值钱的东西（2026-11-18）
+
+### 23.1 结论：文档只讲「怎么处理」，不讲「怎么触发」
+
+`guides/safety` 全文给了三件事：开启方式、被拦的两种形态、前端应该如何渲染。
+**没有任何测试向量 / 触发样例**——合理，官方不会发布一份「怎么绕过风控」的清单。
+所以「真实拒答测不出来」不是我们没找到指南，而是这件事本身没有官方指引。
+
+### 23.2 但官方演示客户端把行为定死了
+
+`deepseek-ai/chat-demo`（文档点名的参考实现）里，`src/services/chat/reply.ts` 的 `settleReply`：
+
+```ts
+blocks: reply.blocks.flatMap((block) => {
+  if (reply.stopReason === 'refusal' && (block.type === 'thinking' || block.type === 'text')) {
+    return []          // 已下发的思考与正文全部丢弃，只保留工具块
+  }
+  ...
+})
+```
+
+配套还有两条：
+
+- `canContinueReply()`：`stopReason === 'refusal'` 时**不允许续写**；
+- `isUsableReply()`：被拒答的轮次 **不进入上下文**（`stopReason !== 'refusal'` 才回传）。
+
+### 23.3 因此我们与官方有一处行为分歧（如实记录）
+
+我们的 `refusalNotice` 是「把 refusal 换成一段可读文本并正常收尾」。
+代价是：这一轮变成了一条**正常的 assistant 回答**，会进入历史、下一轮会被回传，
+而官方做法是丢弃正文且**不回传**。
+
+两种取向各有道理：
+
+| | 官方 demo | 本插件（`refusalNotice: true`） |
+|---|---|---|
+| 用户看到 | 自己的拒答文案（正文被丢弃） | 一段说明文字 |
+| 该轮是否进上下文 | 否 | 是（因此会污染后续上下文） |
+
+这也是 `refusalNotice` **默认关闭**的又一个理由：关闭时 refusal 保持 DSH 原生行为，
+与官方语义最接近。想完全对齐官方的话，把开关关掉即可。
+
+### 23.4 顺带发现：官方 `errors.ts` 其实没细分输入未过审
+
+`src/services/api/errors.ts` 的 `classifyStatus()` 只按状态码归类（401/402/413/429/5xx），
+**`400 Content Exists Risk` 落进 `'other'`**，用户只会看到通用错误。
+也就是说 §22 里我们补的那条识别，比官方 demo 更细——不是抄来的，是文档 + 实测推出来的。
+
+### 23.5 顺手采纳：官方对 Files API 400 的文案细分规则
+
+`errors.ts` 的 `getUploadErrorInfo()` 证明「400 只带 message 文本，只能按文案区分」，规则是：
+
+- `User file count limit exceeded … limit (\d+)` → 文件数量上限
+- `User storage quota exceeded … limit ([\d.]+) GB` → 存储配额上限
+- `You have uploaded an (unsupported|invalid) (file|image)` / `The image is too large to process` /
+  `password-protected` / `Failed to recognize the file` → 解析失败的各种具体原因
+
+原来的 `uploadHint(status)` 只看状态码，所有 400 都是同一句笼统提示。
+现改为 `lib/files.js` 的 `uploadFailureHint(status, detail)`，按官方这套文案细分，
+配 11 条新用例（含「未收录的状态码不瞎猜」）。单测合计 `29 + 18 + 31 = 78` 项。
