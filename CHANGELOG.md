@@ -3,6 +3,34 @@
 本文件记录本插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.1] - 2026-11-18
+
+### 修复
+
+- **`400 Content Exists Risk` 不再被当成普通错误**。官方文档
+  <https://api-docs.deepseek.com/zh-cn/guides/safety> 写明开启 `safety_check` 后，输入未过审
+  会直接返回 `400 Content Exists Risk`（图片被拦时附 `The following images were blocked by
+  content moderation: …`），而原匹配器只认 `stop_reason: refusal`，这条必然漏。
+- 中间件现在区分两种提示：输入未过审说「这条输入未通过审核、模型没有作答」，
+  输出侧拒答说「该回答已被拦截」——混成一句话会误导用户。
+- 新增 5 条匹配用例（共 11 条），其中 4 条是防误判：`max_tokens` 截断、网络错误、
+  `safety_check` 字段非法、限流，都必须判成「不是拒答」。
+
+### 变更
+
+- **设置页真的有界面了**。此前 README 说「设置页可调」，实际上 DSH **不会**拿插件 `Config`
+  schema 自动生成表单：配置 UI 必须由插件客户端注册进 `plugins.bundle.config`
+  （key = 包名）或 `plugins.row.config`（key = `<包名>#<行 id>`）。`client.js` 现已注册配置卡片，
+  经 `ctx.remote.settings.describe/mutate` 读写，写入落 profile patch（volatile，改完立即生效）。
+  实测：打开两个开关后 `cordis.patch.yml` 里出现 `safetyEnabled: true` / `refusalNotice: true`。
+
+### 验证
+
+- 真实拒答**仍未能触发**：5 个类别（钓鱼、暴力威胁、伪造证件、侮辱群体、无 `safety_check` 对照）
+  全部 200 + `end_turn` + `safety_tokens: 0`。因此拦截分支只有单测覆盖，透传分支已端到端验证。
+  证据与探针记录见 `docs/verification-2026-11-17.md` §22。
+- 单元测试扩到 `29 + 18 + 20 = 67` 项。
+
 ## [0.3.0] - 2026-11-18
 
 ### 变更（破坏性默认值）

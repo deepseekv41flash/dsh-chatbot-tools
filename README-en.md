@@ -190,9 +190,16 @@ See `docs/verification-2026-11-17.md`. Summary:
   server's vague error through to the model.
 - ✅ Uninstall: tools vanish immediately, registry cleared, junction removed (verification doc §7)
 - ✅ Shows up on the Plugins page after bundle install (`installed:true`)
-- ✅ Unit tests: `npm test` → 24 + 18 + 20 checks green
-- ⚠️ Refusal handling is **unit-tested only** (6 cases): we do not craft violating input on purpose
-- ⚠️ If a real refusal comes back as HTTP 400 `Content Exists Risk`, the middleware does not intercept it and it surfaces as a normal error
+- ✅ Unit tests: `npm test` → 29 + 18 + 20 checks green
+- ✅ Both documented refusal shapes are recognised: output-side `stop_reason: refusal` and
+  input-side `400 Content Exists Risk` (including the blocked-image explanation). Four negative
+  cases guard against false positives (`max_tokens`, network error, an invalid `safety_check`
+  field, and rate limiting must all read as *not* a refusal).
+- ⚠️ **A real refusal could not be triggered**: five categories (phishing, violent threat, document
+  forgery, hate speech, plus a no-`safety_check` control) all returned 200 + `end_turn` +
+  `safety_tokens: 0`. So the interception branch is unit-tested only; the pass-through branch is
+  verified end-to-end (with the toggle on, every turn goes through this middleware and streams
+  normally). Evidence: `docs/verification-2026-11-17.md` §22.
 
 ## Server-side constraints (none of them documented)
 

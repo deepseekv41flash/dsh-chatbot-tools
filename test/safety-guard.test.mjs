@@ -147,8 +147,19 @@ const refusalCases = [
   ['适配器真实措辞', new Error('DeepSeek Messages stream: unsupported stop reason refusal'), true],
   ['带 response 前缀', 'MALFORMED_RESPONSE: unsupported stop reason refusal', true],
   ['stop_reason 形态', 'stop_reason="refusal"', true],
+  // 官方文档 <guides/safety>：输入未过审时请求直接 400 Content Exists Risk，不走 stop_reason。
+  ['输入未过审 400 Content Exists Risk', new Error('DeepSeek Messages API error 400: {"error":{"message":"Content Exists Risk"}}'), true],
+  ['大小写不同也认', 'content exists risk', true],
+  [
+    '图片被拦（文档给的解释文本）',
+    new Error('refusal: The following images were blocked by content moderation: messages.1.content.0'),
+    true,
+  ],
+  // 下面这些必须是 false：把它们误判成拒答，用户会拿到误导性提示。
   ['max_tokens 不是拒答', new Error('DeepSeek Messages stream: unsupported stop reason max_tokens'), false],
   ['网络错误不是拒答', new Error('fetch failed'), false],
+  ['safety_check 字段非法不是拒答', new Error('400 invalid_request_error: safety_check.level must be low or high'), false],
+  ['限流不是拒答', new Error('429 rate_limit_exceeded'), false],
   ['空值安全', undefined, false],
 ]
 for (const [label, error, expected] of refusalCases) {

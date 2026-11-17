@@ -111,8 +111,15 @@ dsh plugin --profile desktop add link:C:/Users/Admin/dsh-chatbot-tools
 | `ttsTermMap` | `{}` | 朗读前的中文替换表，JSON 字符串，如 `{"Markdown":"马克当文档"}` |
 | `apiBaseURL` / `messagesBaseURL` / `apiVersion` | 官方地址 | 自建网关时改这里 |
 
-**全部可在「设置 → 插件 → dsh-chatbot-tools」里改**：每个字段都标了 `.volatile()`，宿主据此生成表单，
-改完立即生效（volatile 写进运行中的引用），不需要重载插件。凭证解析顺序：
+**内容安全 / 拒答提示这两个开关有界面**：在「插件 → dsh-chatbot-tools」页面里，
+卡片由 `client.js` 注册进 `plugins.bundle.config`——**DSH 不会拿 Config schema 自动生成表单**，
+配置 UI 必须由插件向这个 keyed 槽位（或 `plugins.row.config`，key 为 `<包名>#<行 id>`）注册组件。
+卡片经 `ctx.remote.settings.describe/mutate` 读写本插件的配置条目。
+
+其余字段（模型、上限、TTS 参数等）暂时只能改 profile patch。每个字段都标了 `.volatile()`，
+含义是宿主把改动**写进运行中的引用**（改完立即生效、不需要重载插件）；它不是「自动出表单」的开关。
+
+凭证解析顺序：
 `设置里的 apiKey` → `DEEPSEEK_API_KEY` 环境变量 → **宿主凭据服务**（DSH 设置里存过的 Key）→ DeepSeek 账号登录。
 
 ## 界面集成（语音）
@@ -187,9 +194,14 @@ dsh plugin --profile desktop add link:C:/Users/Admin/dsh-chatbot-tools
   插件已在本地前置拦截并给出可执行建议，不再把服务端那句含糊报错直接丢给模型。
 - ✅ 卸载：工具立即消失、registry 清空、junction 删除（详见验证文档 §7）
 - ✅ 插件页可见：bundle 安装后 `list_bundles` 出现且 `installed:true`
-- ✅ 单元测试：`npm test` → 24 + 18 + 20 项全绿
-- ⚠️ refusal（拒答）**只做了单元测试**（6 例通过）：未主动构造违规输入，属策略边界
-- ⚠️ 若真实拒答以 HTTP 400 `Content Exists Risk` 返回，中间件不拦截，表现为普通错误
+- ✅ 单元测试：`npm test` → 29 + 18 + 20 项全绿
+- ✅ 拒答的**两种**官方形态都已实现识别：输出侧 `stop_reason: refusal` 与输入侧
+  `400 Content Exists Risk`（含图片被拦的解释文本）；另有 4 条防误判用例
+  （`max_tokens` 截断 / 网络错误 / `safety_check` 字段非法 / 限流 都必须判成「不是拒答」）
+- ⚠️ **真实拒答未能触发**：实测 5 个类别（钓鱼、暴力威胁、伪造证件、侮辱群体、
+  以及去掉 `safety_check` 的对照）全部返回 200 + `end_turn` + `safety_tokens: 0`。
+  因此中间件的「拦截分支」只有单测覆盖，没有端到端证据；「透传分支」已端到端验证
+  （开关打开后每轮对话都在经过该中间件且流式正常）。证据见 `docs/verification-2026-11-17.md` §22。
 
 ## 服务端约束（都不是文档写明的）
 

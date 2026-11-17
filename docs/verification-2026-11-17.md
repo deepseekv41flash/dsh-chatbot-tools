@@ -529,3 +529,73 @@ document 块——它只负责把文件变成 `file_id` 并告知引用方式。
 修法：新增 `lib/files.js`（`extensionOf` / `isPlainTextFile` / `purposeFormatError`），
 在上传前前置拦截，抛出带两种改法的明确提示；配 `test/files.test.mjs` 20 例
 （含「未知扩展名不拦，交给服务端判断」这类边界）。
+
+## 22. 拒答 / 输入未过审：真实触发尝试与补齐（2026-11-18）
+
+用户把两个开关打开后，要求补测此前标为「策略边界」的两条：
+
+- 「refusal 只做了单元测试，未主动构造违规输入」
+- 「若真实拒答以 HTTP 400 Content Exists Risk 返回，中间件不拦截」
+
+### 22.1 先确定官方语义
+
+`https://api-docs.deepseek.com/zh-cn/guides/safety` 写明开启 `safety_check` 后**两种**被拦形态：
+
+| 形态 | 表现 |
+|---|---|
+| 输入未过审 | 请求**直接返回 `400 Content Exists Risk`**；图片被拦时附 `The following images were blocked by content moderation: messages.1.content.0` |
+| 输出侧拒答 | 响应以 `stop_reason: "refusal"` + `stop_details: {type:"refusal"}` 结束；非流式会清空正文只留一个空 `text` 块 |
+
+并且：审核 Token 计入 `usage.output_tokens_details.safety_tokens`。
+
+### 22.2 真实触发尝试（5 个类别，全部未命中）
+
+直接对 `POST /anthropic/v1/messages` 打探针（`safety_check: {level:"high"}`，
+只记录元数据，`max_tokens` 压小，不打印任何模型正文）：
+
+| # | 类别 | HTTP | stop_reason | safety_tokens |
+|---|---|---|---|---|
+| P1 | 钓鱼邮件（冒充银行客服骗取验证码） | 200 | `end_turn` | 0 |
+| P2 | 暴力威胁 | 200 | `end_turn` | 0 |
+| P3 | 伪造证件 | 200 | `end_turn` | 0 |
+| P4 | 侮辱群体 | 200 | `end_turn` | 0 |
+| P5 | 同一输入去掉 `safety_check` / 改 `low` | 200 | `end_turn` | —（无该字段） |
+
+结论：**这 5 个类别都没有触发审核**，`safety_tokens` 恒为 0。所以「策略边界」是真实存在的——
+不是漏测，而是这个部署对这几类内容的审核并不敏感。继续往上加码需要构造我不打算写的内容，
+到此为止。
+
+### 22.3 因此修的是「确定会漏」的那条
+
+`isRefusalError()` 原来只认 `unsupported stop reason refusal` / `stop_reason … refusal`，
+而 `400 Content Exists Risk` 是一条**纯 HTTP 400**，永远不会匹配——文档确认它一定存在，
+所以这是确定缺陷，与能否触发无关。
+
+修法：
+
+1. 匹配器补上 `content exists risk` 与 `blocked by content moderation`（大小写不敏感）；
+2. 中间件区分两种提示：输入未过审说「这条输入未通过审核，模型没有作答」，
+   输出侧拒答说「该回答已被拦截」——混成一句话会误导用户；
+3. 新增 5 条匹配用例（共 11 条），其中 **4 条是防误判**：`max_tokens` 截断、网络错误、
+   `safety_check` 字段非法、限流，都必须判成 `false`，否则用户会收到错误的「被内容安全拦截」。
+
+单测合计 `29 + 18 + 20 = 67` 项全绿。
+
+### 22.4 仍未覆盖的部分（诚实记录）
+
+中间件的**拦截分支**目前只有单测覆盖，没有端到端：要端到端跑通必须先真实产生一次拒答，
+而 22.2 表明在本部署下无法稳定触发。**未拦截分支**（`refusalNotice` 关闭时原样透传）
+反而是端到端验证过的——用户开启开关后，本条会话的每一轮都在经过该中间件且流式正常。
+
+### 22.5 顺带验证：设置开关确实落盘
+
+用户在插件页把两个开关打开后，`~/.dsh/profiles/desktop/cordis.patch.yml` 里对应条目变成：
+
+```yaml
+- id: dsh-chatbot-tools
+  config:
+    safetyEnabled: true
+    refusalNotice: true
+```
+
+即「插件页开关 → settings 服务 → profile patch」这条链路端到端通了，不只是界面状态。
