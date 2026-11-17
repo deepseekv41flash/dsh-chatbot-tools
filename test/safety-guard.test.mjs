@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { deferredToolNames, isRefusalError, safetyDecision } from '../lib/safety.js'
 
-const base = { safetyLevel: 'high', safetySkipPurposes: ['title'], safetyGuardDeferLoading: true }
+const base = { safetyEnabled: true, safetyLevel: 'high', safetySkipPurposes: ['title'], safetyGuardDeferLoading: true }
 const plain = [{ name: 'shell', input_schema: { type: 'object' } }]
 const deferred = [
   { name: 'shell', input_schema: { type: 'object' } },
@@ -39,6 +39,22 @@ const stringToolResult = {
 }
 
 const cases = [
+  // ── 总开关：默认关闭，且关闭时无论其它键怎么配都不注入 ──────────────────────
+  [
+    '总开关关闭（默认）→ 不注入，即使 safetyMode=enforce',
+    { purpose: 'chat', body: { tools: plain } },
+    { ...base, safetyEnabled: false, safetyMode: 'enforce' },
+    false,
+    'mode-off',
+  ],
+  [
+    '总开关缺省（undefined）→ 视为关闭',
+    { purpose: 'chat', body: { tools: plain } },
+    { safetyLevel: 'high', safetySkipPurposes: ['title'] },
+    false,
+    'mode-off',
+  ],
+  ['总开关打开但 safetyMode=off → 不注入', { purpose: 'chat', body: { tools: plain } }, { ...base, safetyMode: 'off' }, false, 'mode-off'],
   ['off 不注入', { purpose: 'chat' }, { ...base, safetyMode: 'off' }, false, 'mode-off'],
   ['observe 只记录', { purpose: 'chat', body: { tools: plain } }, { ...base, safetyMode: 'observe' }, false, 'observe'],
   ['enforce 正常注入', { purpose: 'chat', body: { tools: plain } }, { ...base, safetyMode: 'enforce' }, true, 'enforce'],

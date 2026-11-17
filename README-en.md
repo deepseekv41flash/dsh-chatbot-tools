@@ -11,10 +11,10 @@
 
 | Capability | Chatbot | DSH native | This plugin |
 |---|---|---|---|
-| Content safety (`safety_check`) | ✅ request-level | ❌ none | ✅ injection with 3 guards (configurable) |
+| Content safety (`safety_check`) | ✅ request-level | ❌ none | ✅ injection (**off by default**, toggle in Settings) |
 | Image search | ✅ server tool | ❌ none (Search API doesn't support it) | ✅ `chatbot_image_search` |
 | Structured sources (site / date / authority) | ✅ `web_search_result` | partial (plain-text Sources) | ✅ `chatbot_search` |
-| Refusal surfacing | ✅ handled in the UI | ❌ adapter throws | ✅ `llm/stream` fallback |
+| Refusal surfacing | ✅ handled in the UI | ❌ adapter throws | ✅ `llm/stream` fallback (**off by default**) |
 | Document OCR | ✅ `/v1/tools/ocr` | partial (via skills / local libs) | ✅ `chatbot_ocr` |
 | Document upload (Files API) | ✅ file input | ❌ none | ✅ `chatbot_upload_document` → `file_id` |
 | Speech-to-text | ✅ `/v1/tools/asr` | ❌ none built in | ✅ `chatbot_asr` + official voice-input UI |
@@ -32,7 +32,22 @@ out of scope:
 | **User metadata tagging** | An app-level feature (injecting a user profile into the system prompt). DSH has its own system context and agent presets; duplicating it would fight them. |
 | **Protocol-level citations / source cards** | **Deliberately skipped.** Rendering the server's streaming `citations` / `citations_delta` blocks requires a custom LLM adapter — far more cost than value. Structured sources (site, publish date, authority) are returned with the tool result instead, and the model cites them in prose. |
 | **Session titles** | DSH already generates titles natively. |
-| **Referencing an uploaded `file_id` inside a conversation** | `chatbot_upload_document` uploads to the Files API and returns a `file_id`, but **the path that references it as a `document` block in a conversation has not been verified end-to-end**, so it is not counted as verified. The upload itself works. |
+
+> Referencing an uploaded `file_id` used to be listed here as unverified. It is **verified as of 0.3.0** — see "Verified" below.
+
+## Why content safety and the refusal notice are off by default
+
+Because both of them **weaken DSH itself**:
+
+- `safety_check` makes the server moderate the whole request. It rejects legitimate work — network security red-teaming, penetration testing, exploit analysis, malware triage — and a moderation hit ends the turn with `stop_reason: refusal`.
+- The refusal notice only rewrites that error into readable text, but it still changes DSH's native behaviour.
+
+A plugin should not make that trade-off on the user's behalf. Both default to **off**, so out of the box
+this plugin has zero impact on DSH's capabilities. Turn them on under
+Settings → Plugins → dsh-chatbot-tools when you want content safety.
+
+When enabled, the three server-side exclusivity guards still apply, so turning `safety_check` on can
+never brick a session.
 
 ## Development & hot reload (do not use injectors)
 
@@ -78,7 +93,9 @@ Override in the profile patch `config` (a patch row **replaces** the bundle conf
 |---|---|---|
 | `apiKey` | empty | Platform API key. **Required for TTS/ASR**; Search/OCR can use account login |
 | `apiKeyRef` | `DEEPSEEK_API_KEY` | Key name in the host credential service |
-| `safetyMode` | `enforce` | `off` / `observe` (log only) / `enforce` (inject `safety_check`) |
+| `safetyEnabled` | `false` | **Master switch, off by default.** When off, `safety_check` is never injected and DSH is unrestricted |
+| `safetyMode` | `enforce` | Mode used once the master switch is on: `off` / `observe` (log only) / `enforce` |
+| `refusalNotice` | `false` | **Off by default.** When off, refusals keep DSH's native behaviour |
 | `safetyLevel` | `high` | `high` / `low` |
 | `safetyGuardDeferLoading` | `true` | **Keep on**: skip injection when the request has `defer_loading` |
 | `safetySkipPurposes` | `['title','session-title']` | Skip internal requests to save cost |
@@ -135,6 +152,8 @@ bundle's rows to load.
 - `chatbot_image_search(path, query?)` — local image → server image search, returns `image_url` and source pages.
 - `chatbot_ocr(path, purpose?)` — PDF/Word/PPT/image → per-page text.
 - `chatbot_upload_document(path, purpose?)` — local document → Files API `file_id` (≤32 MiB / ≤100 MiB for parse modes).
+  Parse purposes accept document formats only (pdf/docx/pptx/xlsx…); plain text (txt/md/json/csv…) must use
+  `user_data`, and the plugin rejects the mismatch up front.
 - `chatbot_asr(path)` — 16-bit PCM WAV / Ogg Opus → text (≤120 s, ≤8 MiB).
 - `chatbot_tts(text, voice?, format?)` — text → audio file, returns the path.
 - `chatbot_doctor(live?)` — self-check: build tag, current settings, credential channel.
@@ -154,24 +173,33 @@ bundle's rows to load.
 See `docs/verification-2026-11-17.md`. Summary:
 
 - ✅ `safety_check` + normal tools → 200 (**thinking mode only**; a fresh session logs `decision:"enforce"`)
+- ✅ **Master switch off by default**: missing or `false` `safetyEnabled` always yields `mode-off`, even with `safetyMode=enforce`
 - ✅ Non-thinking mode skipped automatically (measured: the same combination returns 400, so the guard checks `thinkingEnabled` first)
 - ✅ Requests with `defer_loading` skip injection (guard hits measured, no 400)
 - ✅ Requests with an image `tool_result` skip injection (**verified end-to-end**: the guard hit for that one request, the next request returned to `enforce`, session stayed alive)
 - ✅ Image search: 15 results with `image_url`
 - ✅ Search: 3 structured sources
 - ✅ OCR / TTS / ASR / document upload each verified live
+- ✅ **The `file_id` reference path is verified**: DOCX upload (`text_recognition`) → referenced as
+  `{"type":"document","source":{"type":"file","file_id":…}}` in Messages → the model answered with the
+  document's unique marker (`BLUE-FALCON-7731`). `anthropic-beta: files-api-2025-04-14` is **required**;
+  without it you get 400 `Missing or invalid anthropic-beta header`.
+- ✅ **Purpose × format matrix measured**: `txt`/`md`/`json` + `user_data` → 200; `txt` + `text_recognition` → 400
+  `the file format is not supported`. Parse purposes accept document formats only; plain text must use
+  `user_data`. The plugin now rejects the mismatch locally with actionable advice instead of passing the
+  server's vague error through to the model.
 - ✅ Uninstall: tools vanish immediately, registry cleared, junction removed (verification doc §7)
 - ✅ Shows up on the Plugins page after bundle install (`installed:true`)
-- ✅ Unit tests: `npm test` → 21 + 18 checks green
+- ✅ Unit tests: `npm test` → 24 + 18 + 20 checks green
 - ⚠️ Refusal handling is **unit-tested only** (6 cases): we do not craft violating input on purpose
 - ⚠️ If a real refusal comes back as HTTP 400 `Content Exists Risk`, the middleware does not intercept it and it surfaces as a normal error
-- ⚠️ The document `file_id` reference path is unverified (see "Not covered")
 
 ## Server-side constraints (none of them documented)
 
 Once `deepseekLlmApiExtensions.register('safety_check')` injects `safety_check`, the server enforces
 exclusivity over the **whole request**. Any violation returns a 400 that **cannot be recovered by
-retrying**, because the offending history is already persisted. Every constraint is guarded:
+retrying**, because the offending history is already persisted. Every constraint is guarded — and these
+guards are only reached when `safetyEnabled: true`:
 
 | # | Constraint | Guard |
 |---|---|---|

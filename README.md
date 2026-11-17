@@ -10,10 +10,10 @@
 
 | 能力 | Chatbot | DSH 原生 | 本插件 |
 |---|---|---|---|
-| 内容安全 `safety_check` | ✅ 请求级 | ❌ 无 | ✅ 带 3 条守卫的注入（设置页可调） |
+| 内容安全 `safety_check` | ✅ 请求级 | ❌ 无 | ✅ 注入（**默认关闭**，设置页可开） |
 | 图片搜索 | ✅ 服务端工具 | ❌ 无（Search API 明确不支持） | ✅ `chatbot_image_search` |
 | 结构化来源（站点/时间/权威度） | ✅ `web_search_result` | 部分（纯文本 Sources） | ✅ `chatbot_search` |
-| 拒答（refusal）可读提示 | ✅ 前端处理 | ❌ 适配器抛错 | ✅ `llm/stream` 兜底 |
+| 拒答（refusal）可读提示 | ✅ 前端处理 | ❌ 适配器抛错 | ✅ `llm/stream` 兜底（**默认关闭**） |
 | 文档识别 OCR | ✅ `/v1/tools/ocr` | 部分（靠技能/本地库） | ✅ `chatbot_ocr` |
 | 文档上传（Files API） | ✅ 文件输入 | ❌ 无 | ✅ `chatbot_upload_document`（拿 `file_id`） |
 | 语音识别 ASR | ✅ `/v1/tools/asr` | ❌ 无内置 | ✅ `chatbot_asr` + 官方语音输入 UI |
@@ -30,7 +30,19 @@
 | **用户元信息标记** | Chatbot 应用层特性（把用户画像塞进系统提示）；DSH 有自己的 system context 与 agent preset 机制，重复注入会打架。 |
 | **协议级 citations / 来源卡** | **有意不做**。服务端 `citations` / `citations_delta` 流式块需要自定义 LLM adapter 才能完整渲染，成本远高于收益；本插件改为「结构化来源」（站点、发布时间、权威度）随工具结果返回，模型在正文里自行引用。 |
 | **会话标题** | DSH 原生已有标题生成，不需要插件介入。 |
-| **文档 `file_id` 的对话引用** | `chatbot_upload_document` 已能把文档上传到 Files API 并返回 `file_id`，但**「把 `file_id` 作为 document 块引用进对话」这条链路尚未实测**，因此不计入「已验证」。上传本身可用。 |
+
+> 文档 `file_id` 的对话引用原先列在这里（未实测），**已在 0.3.0 实测通过**，见下文「已验证」。
+
+## 为什么内容安全与拒答提示默认关闭
+
+因为这两项**会削弱 DSH 本身的能力**：
+
+- `safety_check` 让服务端对整条请求做内容审核。它会拒掉一些完全正当的需求——网络安全红队/渗透测试、漏洞利用分析、恶意样本分析等，一旦被审核命中就是 `stop_reason: refusal`，整轮对话失败。
+- 「拒答提示」虽然只是把报错换成一句可读的话，但它也改变了 DSH 的原生行为。
+
+插件不应该替用户做这个取舍。所以两者**都默认关闭**，默认状态下本插件对 DSH 的能力零影响；需要内容安全时再在 设置 → 插件 → dsh-chatbot-tools 里打开。
+
+打开后仍有三条服务端互斥约束的守卫兜底（见下文），不会因为开着 `safety_check` 而把会话卡死。
 
 ## 开发与热重载（不要用注入器）
 
@@ -81,7 +93,9 @@ dsh plugin --profile desktop add link:C:/Users/Admin/dsh-chatbot-tools
 |---|---|---|
 | `apiKey` | 空 | 平台 API Key。**TTS/ASR 必需**；Search/OCR 可用账号登录。明文存 patch，建议改用宿主凭据 |
 | `apiKeyRef` | `DEEPSEEK_API_KEY` | 宿主凭据服务里的 key 名；DSH 设置里存过的 Key 就在这里 |
-| `safetyMode` | `enforce` | `off` / `observe`（只记录）/ `enforce`（注入 `safety_check`） |
+| `safetyEnabled` | `false` | **内容安全总开关，默认关闭**。关闭时完全不注入 `safety_check`，DSH 能力不受限制 |
+| `safetyMode` | `enforce` | 总开关打开后的模式：`off` / `observe`（只记录）/ `enforce`（注入 `safety_check`） |
+| `refusalNotice` | `false` | **拒答提示开关，默认关闭**。关闭时 refusal 保持 DSH 原始行为；开启后才把抛错换成可读提示 |
 | `safetyLevel` | `high` | `high` / `low` |
 | `safetyGuardDeferLoading` | `true` | **保持开启**：请求带 `defer_loading` 时跳过注入（事故守卫） |
 | `safetySkipPurposes` | `['title','session-title']` | 内部请求不注入，省费用 |
@@ -137,6 +151,7 @@ dsh plugin --profile desktop add link:C:/Users/Admin/dsh-chatbot-tools
 - `chatbot_image_search(path, query?)` — 本地图片 → 服务端图片搜索，返回 `image_url` 缩略图与来源页。
 - `chatbot_ocr(path, purpose?)` — PDF/Word/PPT/图片 → 按页文字。
 - `chatbot_upload_document(path, purpose?)` — 本地文档 → Files API `file_id`（≤32 MiB / 解析类 ≤100 MiB）。
+  解析类用途只收文档格式（pdf/docx/pptx/xlsx…），纯文本（txt/md/json/csv…）只能用 `user_data`，插件会前置拦截。
 - `chatbot_asr(path)` — 16-bit PCM WAV / Ogg Opus → 文字（≤120s，≤8 MiB）。
 - `chatbot_tts(text, voice?, format?)` — 文本 → 语音文件，返回落盘路径。
 - `chatbot_doctor(live?)` — 自检：构建标记、当前设置、凭证通道；`live:true` 时双模式验证 `safety_check`。
@@ -156,23 +171,31 @@ dsh plugin --profile desktop add link:C:/Users/Admin/dsh-chatbot-tools
 见 `docs/verification-2026-11-17.md`。摘要：
 
 - ✅ `safety_check` + 普通工具 200（**仅思考模式**；新会话实测 `decision:"enforce"`）
+- ✅ **总开关默认关闭**：`safetyEnabled` 缺省或 `false` 时一律 `mode-off`，即使 `safetyMode=enforce` 也不注入
 - ✅ 非思考模式自动跳过（实测 `thinking=disabled` 同组合 400，故守卫先判 `thinkingEnabled`）
 - ✅ `defer_loading` 请求自动跳过注入（多条请求实测守卫命中，无 400）
 - ✅ 图片 `tool_result` 请求自动跳过注入（**端到端实测**：守卫命中当次请求，下一请求恢复 `enforce`，会话存活）
 - ✅ 图片搜索 15 条结果（含 `image_url`）
 - ✅ 搜索 3 条结构化来源
 - ✅ OCR / TTS / ASR / 文档上传各自实测通过
+- ✅ **文档 `file_id` 的对话引用链路实测通过**：DOCX 上传（`text_recognition`）→
+  `{"type":"document","source":{"type":"file","file_id":…}}` 引用进 Messages → 模型准确答出文档里的唯一标记
+  （`BLUE-FALCON-7731`）。同时确认 **`anthropic-beta: files-api-2025-04-14` 是必需的**，去掉即 400
+  `Missing or invalid anthropic-beta header`。
+- ✅ **用途 × 格式矩阵实测**：`txt`/`md`/`json` + `user_data` → 200；`txt` + `text_recognition` → 400
+  `the file format is not supported`。解析类用途只收文档格式，纯文本只能用 `user_data`；
+  插件已在本地前置拦截并给出可执行建议，不再把服务端那句含糊报错直接丢给模型。
 - ✅ 卸载：工具立即消失、registry 清空、junction 删除（详见验证文档 §7）
 - ✅ 插件页可见：bundle 安装后 `list_bundles` 出现且 `installed:true`
-- ✅ 单元测试：`npm test` → 21 + 18 项全绿
+- ✅ 单元测试：`npm test` → 24 + 18 + 20 项全绿
 - ⚠️ refusal（拒答）**只做了单元测试**（6 例通过）：未主动构造违规输入，属策略边界
 - ⚠️ 若真实拒答以 HTTP 400 `Content Exists Risk` 返回，中间件不拦截，表现为普通错误
-- ⚠️ 文档 `file_id` 的对话引用链路未实测（见「不覆盖」表）
 
 ## 服务端约束（都不是文档写明的）
 
 `deepseekLlmApiExtensions.register('safety_check')` 一旦注入，服务端就会对**整个请求**施加排他性校验。
-踩中任何一条都返回 400，而且**历史已持久化后无法重试自救**。本插件为每条都实现了守卫：
+踩中任何一条都返回 400，而且**历史已持久化后无法重试自救**。本插件为每条都实现了守卫
+（仅在 `safetyEnabled: true` 时才会走到这些判定，默认关闭时根本不注入）：
 
 | # | 约束 | 守卫 |
 |---|---|---|

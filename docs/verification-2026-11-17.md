@@ -469,3 +469,63 @@ WebSocket 版本查询参数也只有 `voice_id`、`format`、`filter_markdown`�
 就必须自己承担上面三条的全部守卫义务。
 
 已按用户决定：不发公开 issue，三条约束合并成一封邮件发 `api-service@deepseek.com`（续上一封 TTS 反馈）。
+
+## 21. 文件引用链路补测 + 内容安全改为默认关闭（2026-11-18）
+
+### 21.1 为什么要改默认值
+
+用户明确要求：`safety_check` 与拒答提示**会限制 DSH 本身的能力**（内容审核会把网安红队 /
+渗透测试这类正当需求判成拒答），插件不该替用户做这个取舍。因此两者改为**默认关闭**，
+开关交给用户在设置页决定。
+
+- 新增总开关 `safetyEnabled`，默认 `false`；`decide()` 第一句就是
+  `if (cfg.safetyEnabled !== true) return { inject: false, reason: 'mode-off' }`，
+  所以缺省 / `false` / 任意 `safetyMode` 组合都不会注入。
+- 新增 `refusalNotice`，默认 `false`；`llm/stream` 中间件在关闭时**原样透传**
+  （`for await (const chunk of await next()) yield chunk; return`），不改变 DSH 行为。
+- 两条服务端互斥守卫保持不变，只是现在只在开关打开后才会走到。
+
+单测新增 3 例覆盖总开关语义（关闭 / 缺省 / 打开但 mode=off），`safety-guard` 共 24 项全绿。
+
+### 21.2 补测：`file_id` 作为 document 块引用进对话
+
+**这是此前 README 明确标为「未实测」的那一项。**
+
+测试脚本 `~/.dsh/tmp/docref-test.mjs`（一次性，不入库）。凭证从
+`~/.dsh/.credentials.yaml` 的 `refs.DEEPSEEK_API_KEY`（35 字符）读取，**全程不打印**。
+
+步骤与结果：
+
+| 步骤 | 结果 |
+|---|---|
+| 生成探针 DOCX（python-docx，含唯一标记 `BLUE-FALCON-7731`，36,825 B） | — |
+| `POST /files`，`purpose=text_recognition`（multipart，`purpose` 在 `file` 之前） | **200**，`file_id = file-api-992ae83a-b5cb-4c6b-b242-d33a503e89b1` |
+| `POST /anthropic/v1/messages`，content 首块 `{"type":"document","source":{"type":"file","file_id":…}}`，带 `anthropic-beta: files-api-2025-04-14` | **200**，`model=deepseek-flash`，`stop_reason=end_turn` |
+| 模型回答 | `BLUE-FALCON-7731` —— **标记命中，证明文件内容真的进了模型上下文** |
+| 同一请求去掉 `anthropic-beta` 头 | **400** `Missing or invalid anthropic-beta header` |
+
+结论：**`file_id` 引用链路可用，且 `anthropic-beta: files-api-2025-04-14` 是必需请求头。**
+
+一条边界：这不等于「DSH 自己的对话流程能发 document 块」。查 `app.asar` 得到的 7 处
+`files-api-2025-04-14` 全部来自捆绑的 Anthropic SDK 文档/CHANGELOG，**不是 DeepSeek 适配器
+的代码**，所以「DSH 会不会自动产出 document 块」仍未证实。本插件本身也不往对话里注入
+document 块——它只负责把文件变成 `file_id` 并告知引用方式。
+
+### 21.3 顺带测出并修掉的缺陷：用途 × 格式矩阵
+
+补测时发现 `chatbot_upload_document` 对纯文本文件配解析用途会直接 400，而且服务端那句话
+完全不指向真实原因。实测矩阵：
+
+| 文件 | purpose | 结果 |
+|---|---|---|
+| `probe.txt` | `user_data` | **200** `file-api-6492ad65-…` |
+| `probe.txt` | `text_recognition` | **400** `Failed to recognize the file: the file format is not supported` |
+| `probe.md` | `user_data` | **200** `file-api-47ac0868-…` |
+| `probe.json` | `user_data` | **200** `file-api-86913bab-…` |
+
+即：**解析类用途只接受文档格式；纯文本类只能用 `user_data`。** 服务端不区分「格式不支持」
+和「用途不匹配」，一律回 `the file format is not supported`，极易误判成文件损坏。
+
+修法：新增 `lib/files.js`（`extensionOf` / `isPlainTextFile` / `purposeFormatError`），
+在上传前前置拦截，抛出带两种改法的明确提示；配 `test/files.test.mjs` 20 例
+（含「未知扩展名不拦，交给服务端判断」这类边界）。

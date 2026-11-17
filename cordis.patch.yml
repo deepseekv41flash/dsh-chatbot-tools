@@ -7,7 +7,9 @@
       inject:
         - tools
       config:
-        # 内容安全三态：off / observe / enforce
+        # 内容安全与拒答提示**都默认关闭**：它们会限制 DSH 本身的能力
+        # （内容审核会拒掉网安红队/渗透测试这类正常需求），所以开关交给用户。
+        safetyEnabled: false
         safetyMode: enforce
         safetyLevel: high
         safetyGuardDeferLoading: true
@@ -15,6 +17,7 @@
           - title
           - session-title
         safetyLog: true
+        refusalNotice: false
         model: deepseek-flash
         serverTool: deepseek_web_search
         maxUses: 1

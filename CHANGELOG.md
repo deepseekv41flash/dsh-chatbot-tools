@@ -3,6 +3,34 @@
 本文件记录本插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-11-18
+
+### 变更（破坏性默认值）
+
+- **内容安全改为默认关闭**。新增总开关 `safetyEnabled`（默认 `false`）。关闭时完全不注入
+  `safety_check`，插件对 DSH 能力零影响。理由：内容审核会拒掉网安红队/渗透测试这类正当需求，
+  这个取舍不该由插件替用户做。`safetyMode`（`off`/`observe`/`enforce`）保留，仅在总开关打开后生效。
+- **拒答提示改为默认关闭**。新增 `refusalNotice`（默认 `false`）。关闭时 `llm/stream` 原样透传，
+  完全保持 DSH 的原始行为；开启后才把 refusal 抛错换成可读提示。
+- 两条服务端互斥守卫不变，但只在 `safetyEnabled: true` 时才会走到。
+
+### 新增
+
+- `lib/files.js` + `test/files.test.mjs`：Files API「用途 × 文件格式」兼容性判定。
+  实测发现解析类用途只接受文档格式，纯文本（txt/md/json/csv…）只能用 `user_data`，
+  而服务端只回一句含义不清的 `the file format is not supported`。现在插件前置拦截并给出可执行建议。
+
+### 修复
+
+- `chatbot_upload_document` 不再把「用途与格式不匹配」的含糊报错直接丢给模型。
+
+### 验证
+
+- 补测文档引用的未测项：DOCX 上传（`text_recognition`）→ 以
+  `{"type":"document","source":{"type":"file","file_id":…}}` 引用进 Messages → 模型准确答出
+  文档内唯一标记；确认 `anthropic-beta: files-api-2025-04-14` 为必需请求头。
+- 单元测试扩到 `24 + 18 + 20` 项（新增总开关 3 例、格式判定 20 例）。
+
 ## [0.2.2] - 2026-11-18
 
 ### 修复
